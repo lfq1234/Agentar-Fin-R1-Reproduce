@@ -216,3 +216,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / front-end
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+.pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Model artifacts (large, do not commit)
+*.bin
+*.safetensors
+checkpoints/
+wandb/
+*.pt
+
+# Paper PDFs (large binaries, keep local only)
+*.pdf
+
