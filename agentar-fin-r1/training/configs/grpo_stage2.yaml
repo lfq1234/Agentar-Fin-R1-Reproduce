@@ -1,0 +1,38 @@
+# Stage-2 GRPO config (paper §3.2 / §3.3). group_size=4 per user request.
+model:
+  model_name: "Qwen/Qwen3.5-9B"
+  stage1_adapter: null          # path to Stage-1 LoRA adapter to initialise from (optional)
+
+grpo:
+  group_size: 4                 # G rollouts per prompt
+  temperature: 0.9
+  top_p: 0.95
+  max_new_tokens: 1024
+  max_prompt_tokens: 2048
+  learning_rate: 1.0e-6
+  beta: 0.04                    # KL penalty coefficient (GRPO default)
+  clip_eps: 0.2                 # PPO clip epsilon
+  mu: 1                         # inner optimisation epochs per batch
+  epochs: 1                     # passes over the hard subset
+  warmup_steps: 0
+  max_grad_norm: 1.0
+  optimizer: "adamw"
+
+reward:
+  weights:
+    correctness: 1.0            # verifier-based (numeric / substring match to gold)
+    format: 0.3                 # <think>…</think> structure
+    length: 0.0                 # length penalty (off by default)
+
+targeted_sft:                   # paper: apply when GRPO stalls on a category
+  stall_patience: 25            # steps without reward improvement -> trigger
+  targeted_sft_steps: 5
+
+data:
+  hard_subset: "data/golden/hard_subset.jsonl"   # from attribution loop / Stage-1 errors
+  max_samples: null             # null = full; e.g. 200 for a quick prototype
+
+run:
+  output_dir: "checkpoints/stage2-grpo"
+  log_every: 5
+  seed: 42
