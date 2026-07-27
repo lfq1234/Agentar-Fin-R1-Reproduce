@@ -1,0 +1,70 @@
+# Stage 1 SFT training configuration
+# Model: Qwen/Qwen3.5-9B (QLoRA, 4-bit NF4)
+# Financial CoT corpus: antgroup/Agentar-DeepFinance-100K (paper §4.2 training data)
+
+model:
+  name: "Qwen/Qwen3.5-9B"
+  trust_remote_code: true
+  torch_dtype: "bfloat16"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+data:
+  # Paper §4.2 lists DeepFinance-100K as part of the Agentar-Fin-R1 training data.
+  # Fin-R1-300K (DeepFinance-300K) is NOT released, so DeepFinance-100K is the
+  # concrete CoT training corpus for this reproduction.
+  financial_data: "antgroup/Agentar-DeepFinance-100K"
+  # Once the data pipeline (agentar-fin-r1/data) synthesizes (query,thinking,answer)
+  # triples, drop its JSONL path here to merge into the financial corpus.
+  extra_data: null
+  general_data: null          # §3.2: "augmented with extensive general reasoning datasets" (e.g. a MATH hub path)
+  split: "train"
+  max_financial: null         # null = full; set e.g. 5000 for quick prototype
+  max_general: null
+  include_thinking: true      # train on CoT traces (wrapped in <think> tags)
+  max_seq_length: 4096        # paper uses 16K; lower for prototypes
+
+training:
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4   # effective batch = 4 * 4 = 16
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  bf16: true
+  logging_steps: 10
+  save_strategy: "steps"
+  save_steps: 200
+  save_total_limit: 3
+  eval_strategy: "no"
+  report_to: "none"               # set to "wandb" for experiment tracking
+  dataloader_num_workers: 0
+  seed: 42
+
+difficulty_weighting:
+  # "complexity" : use DeepFinance-100K's native Complexity (1-10) annotation (default)
+  # "heuristic"  : 6-class task prior, no generation
+  # "passk"      : faithful Algorithm 1 pass@k estimation (requires generation)
+  method: "complexity"
+  smoothing_rho: 0.9
+  floor: 0.1
+
+output_dir: "./checkpoints/stage1"

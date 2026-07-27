@@ -1,5 +1,4 @@
-"""Level 1 — Source: trusted knowledge engineering.
+"""Source stage — knowledge engineering (paper §2.3.1)."""
+from .knowledge_engineering import knowledge_engineering, save_knowledge_units, load_seed_records
 
-Raw authoritative financial docs -> NER/POS -> normalization -> detoxification
--> refinement. Produces a high-fidelity knowledge repository K.
-"""
+__all__ = ["knowledge_engineering", "save_knowledge_units", "load_seed_records"]
