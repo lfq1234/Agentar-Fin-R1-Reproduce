@@ -1,17 +1,16 @@
 # Stage 1 SFT training configuration
-# Model: Qwen/Qwen3.5-9B (QLoRA, 4-bit NF4)
+# Model: Qwen/Qwen3.5-9B
 # Financial CoT corpus: antgroup/Agentar-DeepFinance-100K (paper §4.2 training data)
+# Loaded by: python -m sft  (training/sft/__init__.py)
 
 model:
   name: "Qwen/Qwen3.5-9B"
   trust_remote_code: true
-  torch_dtype: "bfloat16"
-
-quantization:
-  load_in_4bit: true
-  bnb_4bit_quant_type: "nf4"
-  bnb_4bit_compute_dtype: "bfloat16"
-  bnb_4bit_use_double_quant: true
+  # Single precision switch for the base model. Shared by both stages.
+  #   fp16  -> full fp16 weights + LoRA, no quantisation (default)
+  #   bf16  -> full bf16 weights + LoRA, no quantisation
+  #   int4  -> 4-bit NF4 QLoRA (legacy low-VRAM mode)
+  precision: "fp16"
 
 lora:
   r: 16
@@ -49,7 +48,10 @@ training:
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.05
   weight_decay: 0.01
-  bf16: true
+  # Precision for the trainer's mixed-precision scope. Must match model.precision
+  # (fp16 weights -> fp16 training scope). bf16 is kept explicit & off.
+  fp16: true
+  bf16: false
   logging_steps: 10
   save_strategy: "steps"
   save_steps: 200

@@ -2,7 +2,7 @@
 
 Usage::
 
-    from finr1_training.models import load_model, load_tokenizer, apply_lora
+    from model import load_model, load_tokenizer, apply_lora
 
     tokenizer = load_tokenizer("Qwen/Qwen3.5-9B")
     model     = load_model("Qwen/Qwen3.5-9B", device_map="auto")
@@ -40,14 +40,21 @@ DEFAULT_LORA_TARGET_MODULES = [
 
 @dataclass
 class ModelConfig:
-    """Centralised hyper-params for model loading + LoRA."""
+    """Centralised hyper-params for model loading + LoRA.
+
+    ``precision`` is the single source of truth for the numeric format — every
+    other dtype / quantisation flag is derived from it in ``__post_init__``:
+
+    * ``"int4"``  -> 4-bit NF4 QLoRA (``load_in_4bit=True``), compute dtype bf16.
+    * ``"fp16"``  -> full fp16 weights + LoRA, **no quantisation** (default).
+    * ``"bf16"``  -> full bf16 weights + LoRA, **no quantisation**.
+
+    Both training stages (SFT, GRPO) reuse this same config so the base model's
+    precision is identical across Stage 1 -> Stage 2.
+    """
 
     model_name_or_path: str = DEFAULT_MODEL_NAME
-    # Quantisation (4-bit NF4 for QLoRA)
-    load_in_4bit: bool = True
-    bnb_4bit_quant_type: str = "nf4"
-    bnb_4bit_compute_dtype: torch.dtype = torch.bfloat16
-    bnb_4bit_use_double_quant: bool = True
+    precision: Literal["int4", "fp16", "bf16"] = "fp16"
     # LoRA
     lora_r: int = DEFAULT_LORA_R
     lora_alpha: int = DEFAULT_LORA_ALPHA
@@ -55,10 +62,27 @@ class ModelConfig:
     lora_target_modules: list[str] = field(
         default_factory=lambda: list(DEFAULT_LORA_TARGET_MODULES)
     )
-    # Misc
-    torch_dtype: torch.dtype = torch.bfloat16
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "sdpa"
     trust_remote_code: bool = True
+
+    # --- derived fields (set in __post_init__, do NOT override manually) ---
+    load_in_4bit: bool = False
+    torch_dtype: torch.dtype = torch.float16
+    bnb_compute_dtype: torch.dtype = torch.float16
+
+    def __post_init__(self) -> None:
+        if self.precision == "int4":
+            self.load_in_4bit = True
+            self.torch_dtype = torch.bfloat16
+            self.bnb_compute_dtype = torch.bfloat16
+        elif self.precision == "bf16":
+            self.load_in_4bit = False
+            self.torch_dtype = torch.bfloat16
+            self.bnb_compute_dtype = torch.bfloat16
+        else:  # fp16
+            self.load_in_4bit = False
+            self.torch_dtype = torch.float16
+            self.bnb_compute_dtype = torch.float16
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +95,9 @@ def _bnb_config(cfg: ModelConfig) -> BitsAndBytesConfig | None:
         return None
     return BitsAndBytesConfig(
         load_in_4bit=True,
-        bnb_4bit_quant_type=cfg.bnb_4bit_quant_type,
-        bnb_4bit_compute_dtype=cfg.bnb_4bit_compute_dtype,
-        bnb_4bit_use_double_quant=cfg.bnb_4bit_use_double_quant,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=cfg.bnb_compute_dtype,
+        bnb_4bit_use_double_quant=True,
     )
 
 

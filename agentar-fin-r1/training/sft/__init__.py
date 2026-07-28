@@ -33,11 +33,11 @@ pipeline also produces.  pass@k remains available (``"passk"``) for a faithful r
 
 Quick start::
 
-    python -m finr1_training.scripts.train_sft
+    python -m sft
 
 Programmatic::
 
-    from finr1_training.stage1_sft import train_stage1
+    from sft import train_stage1
     train_stage1(output_dir="./checkpoints/stage1")
 """
 from __future__ import annotations
@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -52,14 +53,19 @@ from datasets import Dataset, concatenate_datasets, load_dataset
 from transformers import TrainingArguments
 from trl import SFTConfig, SFTTrainer
 
-from finr1_training.models import (
+from model import (
+    DEFAULT_LORA_ALPHA,
+    DEFAULT_LORA_DROPOUT,
+    DEFAULT_LORA_R,
+    DEFAULT_LORA_TARGET_MODULES,
+    DEFAULT_MODEL_NAME,
     ModelConfig,
     apply_lora,
     load_model,
     load_tokenizer,
     print_trainable_parameters,
 )
-from finr1_training.weighting import (
+from .weighting import (
     pass_at_k,
     difficulty_weight,
     smoothed_weight,
@@ -581,7 +587,7 @@ def train_stage1(
     _cfg = model_cfg or ModelConfig()
 
     # ---- Model + tokenizer ----
-    logger.info("=== Stage 1: load Qwen3.5-9B + QLoRA ===")
+    logger.info("=== Stage 1: load %s (precision=%s) ===", _cfg.model_name_or_path, _cfg.precision)
     tokenizer = load_tokenizer(_cfg.model_name_or_path)
     model = load_model(_cfg.model_name_or_path, cfg=_cfg)
     model = apply_lora(model, cfg=_cfg)
@@ -644,16 +650,35 @@ def train_stage1(
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# CLI  (python -m sft)
+# Defaults come from config.yaml (this folder); CLI flags override the YAML values.
 # ---------------------------------------------------------------------------
+
+_DEFAULT_CONFIG = str(Path(__file__).resolve().parent / "config.yaml")
+
+
+def _load_yaml(path: str) -> dict:
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     import argparse
 
-    p = argparse.ArgumentParser(description="Stage 1 SFT — Agentar-Fin-R1 reproduction (§3.2)")
-    p.add_argument("--output-dir", default=DEFAULT_SFT_ARGS["output_dir"])
-    p.add_argument("--financial-data", default="antgroup/Agentar-DeepFinance-100K",
+    p = argparse.ArgumentParser(
+        description="Stage 1 SFT — Agentar-Fin-R1 reproduction (§3.2)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("--config", default=_DEFAULT_CONFIG, help="YAML config file")
+    p.add_argument("--output-dir", default=None)
+    p.add_argument("--financial-data", default=None,
                    help="Financial CoT corpus (DeepFinance-100K by default)")
     p.add_argument("--extra-data", default=None,
                    help="JSONL from data pipeline (ternary-group synthesis) to merge")
@@ -661,30 +686,49 @@ if __name__ == "__main__":
     p.add_argument("--max-financial", type=int, default=None)
     p.add_argument("--max-general", type=int, default=None)
     p.add_argument("--no-thinking", action="store_true")
-    p.add_argument("--weighting", choices=["complexity", "heuristic", "passk"], default="complexity")
-    p.add_argument("--epochs", type=int, default=3)
-    p.add_argument("--batch-size", type=int, default=4)
-    p.add_argument("--lr", type=float, default=2e-4)
-    p.add_argument("--seq-length", type=int, default=4096,
-                   help="Paper uses 16K; use lower for prototypes")
+    p.add_argument("--weighting", choices=["complexity", "heuristic", "passk"], default=None)
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--seq-length", type=int, default=None)
     args = p.parse_args()
 
+    cfg = _load_yaml(args.config)
+    m = cfg.get("model", {})
+    l = cfg.get("lora", {})
+    d = cfg.get("data", {})
+    dw = cfg.get("difficulty_weighting", {})
+    t = cfg.get("training", {})
+
+    # Build the shared ModelConfig — `precision` (fp16/bf16/int4) drives dtype + quantisation.
+    model_cfg = ModelConfig(
+        model_name_or_path=m.get("name", DEFAULT_MODEL_NAME),
+        precision=m.get("precision", "fp16"),
+        lora_r=l.get("r", DEFAULT_LORA_R),
+        lora_alpha=l.get("alpha", DEFAULT_LORA_ALPHA),
+        lora_dropout=l.get("dropout", DEFAULT_LORA_DROPOUT),
+        lora_target_modules=l.get("target_modules", list(DEFAULT_LORA_TARGET_MODULES)),
+    )
+
     overrides = dict(
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        learning_rate=args.lr,
-        max_seq_length=args.seq_length,
+        num_train_epochs=args.epochs or t.get("num_train_epochs", 3),
+        per_device_train_batch_size=args.batch_size or t.get("per_device_train_batch_size", 4),
+        learning_rate=args.lr or t.get("learning_rate", 2e-4),
+        max_seq_length=args.seq_length or d.get("max_seq_length", 4096),
+        fp16=t.get("fp16", False),
+        bf16=t.get("bf16", False),
     )
     ckpt = train_stage1(
-        output_dir=args.output_dir,
-        financial_data=args.financial_data,
-        extra_data_path=args.extra_data,
-        general_data=args.general_data,
-        max_financial=args.max_financial,
-        max_general=args.max_general,
-        include_thinking=not args.no_thinking,
-        max_seq_length=args.seq_length,
-        weighting_method=args.weighting,
+        output_dir=args.output_dir or cfg.get("output_dir", DEFAULT_SFT_ARGS["output_dir"]),
+        financial_data=args.financial_data or d.get("financial_data", "antgroup/Agentar-DeepFinance-100K"),
+        extra_data_path=args.extra_data or d.get("extra_data"),
+        general_data=args.general_data or d.get("general_data"),
+        max_financial=args.max_financial or d.get("max_financial"),
+        max_general=args.max_general or d.get("max_general"),
+        include_thinking=not args.no_thinking if args.no_thinking else d.get("include_thinking", True),
+        max_seq_length=args.seq_length or d.get("max_seq_length", 4096),
+        weighting_method=args.weighting or dw.get("method", "complexity"),
         sft_args_override=overrides,
+        model_cfg=model_cfg,
     )
     print(f"\nDone! Final checkpoint: {ckpt}")

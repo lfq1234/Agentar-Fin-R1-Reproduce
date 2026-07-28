@@ -1,10 +1,16 @@
-# Stage-2 GRPO config (paper §3.2 / §3.3). group_size=4 per user request.
+# Stage-2 GRPO config (paper §3.2 / §3.3)
+# Loaded by: python -m grpo  (training/grpo/__init__.py)
 model:
   model_name: "Qwen/Qwen3.5-9B"
   stage1_adapter: null          # path to Stage-1 LoRA adapter to initialise from (optional)
+  # Single precision switch for the base model — shared with Stage 1.
+  #   fp16  -> full fp16 weights + LoRA, no quantisation (default)
+  #   bf16  -> full bf16 weights + LoRA, no quantisation
+  #   int4  -> 4-bit NF4 QLoRA (legacy low-VRAM mode)
+  precision: "fp16"
 
 grpo:
-  group_size: 4                 # G rollouts per prompt
+  group_size: 8                 # G rollouts per prompt (requirement: 8)
   temperature: 0.9
   top_p: 0.95
   max_new_tokens: 1024

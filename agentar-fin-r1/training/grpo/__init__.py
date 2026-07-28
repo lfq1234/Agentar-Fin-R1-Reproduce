@@ -42,13 +42,15 @@ import math
 import os
 import random
 import re
+import yaml
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 import torch
 from torch import nn
 
-from .models import apply_lora, load_model, load_tokenizer
+from model import ModelConfig, apply_lora, load_model, load_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +183,7 @@ def _token_logprobs(
 @dataclass
 class GRPOConfig:
     # --- rollout / group ---
-    group_size: int = 4                 # G rollouts per prompt (user request)
+    group_size: int = 8                 # G rollouts per prompt (requirement: 8)
     temperature: float = 0.9            # sampling temperature for rollouts
     top_p: float = 0.95
     max_new_tokens: int = 1024
@@ -400,6 +402,7 @@ def train_stage2(
     stage1_adapter: str | None = None,
     cfg: GRPOConfig | None = None,
     max_samples: int | None = None,
+    model_cfg: ModelConfig | None = None,
 ) -> None:
     """Run Stage-2 GRPO (+ targeted SFT fallback) on a *hard subset*.
 
@@ -409,24 +412,32 @@ def train_stage2(
             and a ``task`` tag (used only for logging).  These typically come from the
             attribution loop / Stage-1 error analysis (see ``attribution.py``).
         output_dir: directory for the saved Stage-2 LoRA adapter.
-        model_name: base model id (default Qwen/Qwen3.5-9B).
+        model_name: base model id (default Qwen/Qwen3.5-9B). Overrides ``model_cfg``
+            only when explicitly different from the default.
         stage1_adapter: optional path to a Stage-1 LoRA adapter to start from.
-        cfg: GRPOConfig (group_size=4 by default).
+        cfg: GRPOConfig (group_size=8 by default).
         max_samples: cap on how many hard examples to use (prototype runs).
+        model_cfg: shared ModelConfig (precision/dtype/quantisation). Honours the
+            same ``precision`` switch as Stage 1 so both stages load the base model
+            identically.
     """
     cfg = cfg or GRPOConfig()
     cfg.output_dir = output_dir  # type: ignore[attr-defined]
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    tokenizer = load_tokenizer(model_name)
+    _model_cfg = model_cfg or ModelConfig()
+    if model_name != "Qwen/Qwen3.5-9B":
+        _model_cfg.model_name_or_path = model_name
+
+    tokenizer = load_tokenizer(_model_cfg.model_name_or_path)
     # current (trainable) policy
-    model = load_model(model_name)
-    model = apply_lora(model)
+    model = load_model(_model_cfg.model_name_or_path, cfg=_model_cfg)
+    model = apply_lora(model, cfg=_model_cfg)
     if stage1_adapter:
         model.load_adapter(stage1_adapter, adapter_name="stage1")
         logger.info("Loaded Stage-1 adapter from %s", stage1_adapter)
     # frozen reference policy (KL target) -- base model, no LoRA
-    ref_model = load_model(model_name)
+    ref_model = load_model(_model_cfg.model_name_or_path, cfg=_model_cfg)
     ref_model.eval()
     for p in ref_model.parameters():
         p.requires_grad = False
@@ -458,3 +469,83 @@ def train_stage2(
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     logger.info("Stage-2 adapter saved -> %s", output_dir)
+
+
+# ---------------------------------------------------------------------------
+# CLI  (python -m grpo)
+# Defaults come from config.yaml (this folder); CLI flags override the YAML values.
+# ---------------------------------------------------------------------------
+
+def _load_yaml(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    _DEFAULT_CONFIG = str(Path(__file__).resolve().parent / "config.yaml")
+    p = argparse.ArgumentParser(description="Stage-2 GRPO (+ targeted SFT) for Agentar-Fin-R1")
+    p.add_argument("--config", default=_DEFAULT_CONFIG)
+    p.add_argument("--hard-subset", default=None, help="JSONL of hard examples (question/answer)")
+    p.add_argument("--output-dir", default=None)
+    p.add_argument("--model-name", default=None)
+    p.add_argument("--stage1-adapter", default=None)
+    p.add_argument("--group-size", type=int, default=None, help="G rollouts per prompt")
+    p.add_argument("--max-samples", type=int, default=None)
+    p.add_argument("--learning-rate", type=float, default=None)
+    p.add_argument("--beta", type=float, default=None, help="KL coefficient")
+    p.add_argument("--temperature", type=float, default=None)
+    args = p.parse_args()
+
+    cfg_yaml = _load_yaml(args.config)
+    grpo = cfg_yaml.get("grpo", {})
+    reward = cfg_yaml.get("reward", {}).get("weights", {})
+    tgt = cfg_yaml.get("targeted_sft", {})
+    data = cfg_yaml.get("data", {})
+    run = cfg_yaml.get("run", {})
+    model = cfg_yaml.get("model", {})
+
+    cfg = GRPOConfig(
+        group_size=args.group_size or grpo.get("group_size", 4),
+        temperature=args.temperature or grpo.get("temperature", 0.9),
+        top_p=grpo.get("top_p", 0.95),
+        max_new_tokens=grpo.get("max_new_tokens", 1024),
+        learning_rate=args.learning_rate or grpo.get("learning_rate", 1e-6),
+        beta=args.beta or grpo.get("beta", 0.04),
+        clip_eps=grpo.get("clip_eps", 0.2),
+        mu=grpo.get("mu", 1),
+        epochs=grpo.get("epochs", 1),
+        max_grad_norm=grpo.get("max_grad_norm", 1.0),
+        reward_weights={
+            "correctness": reward.get("correctness", 1.0),
+            "format": reward.get("format", 0.3),
+            "length": reward.get("length", 0.0),
+        },
+        stall_patience=tgt.get("stall_patience", 25),
+        targeted_sft_steps=tgt.get("targeted_sft_steps", 5),
+        log_every=run.get("log_every", 5),
+        seed=run.get("seed", 42),
+    )
+
+    hard_subset = args.hard_subset or data.get("hard_subset")
+    if not hard_subset:
+        raise SystemExit("ERROR: provide --hard-subset or set data.hard_subset in config")
+
+    # Build the shared ModelConfig — `precision` (fp16/bf16/int4) drives dtype + quantisation.
+    model_cfg = ModelConfig(
+        model_name_or_path=model.get("model_name", "Qwen/Qwen3.5-9B"),
+        precision=model.get("precision", "fp16"),
+    )
+
+    train_stage2(
+        hard_subset=hard_subset,
+        output_dir=args.output_dir or run.get("output_dir", "checkpoints/stage2-grpo"),
+        model_name=args.model_name or model.get("model_name", "Qwen/Qwen3.5-9B"),
+        stage1_adapter=args.stage1_adapter or model.get("stage1_adapter"),
+        cfg=cfg,
+        max_samples=args.max_samples if args.max_samples is not None else data.get("max_samples"),
+        model_cfg=model_cfg,
+    )
