@@ -1,69 +1,92 @@
-# Stage 2 GRPO 技术文档（`grpo/__init__.py`）
+# Stage 2 GRPO 技术文档（`grpo/`）
 
-## 1. 目标（论文 §3.3）
+## 1. 实现方式：verl 库 + LoRA
 
-**难题攻坚强化学习**。在 Stage 1 适配器基础上，对一道**难题**让模型自己生成
-`group_size` 条回答，用奖励打分、组间互相比优劣来更新策略，专攻 SFT 学不好的硬骨头。
+Stage 2 是**完全基于 `verl` 库的 GRPO 实现**，不再手写 GRPO 数学。
+`verl`（字节火山引擎 RL 框架）原生提供：
 
-与 SFT 的区别一句话：**SFT 给标准答案抄着学；GRPO 不给答案，自己答、自己评、好留坏改。**
+- GRPO 训练器（`algorithm.adv_estimator=grpo`：组相对优势 + KL 到 reference）；
+- rollout 引擎（vLLM / SGLang）；
+- **LoRA 支持**（`actor_rollout_ref.model.lora_rank`），只训练低秩增量。
 
----
+本目录只做三件事，不碰训练数学：
 
-## 2. GRPO 算法（本仓库实现）
+| 文件 | 职责 |
+|---|---|
+| `grpo/data.py` | 把 Stage-1 错误/归因产出的 `hard_subset.jsonl` 转成 verl 的 RLHF parquet |
+| `grpo/reward.py` | verl 奖励函数 `compute_score`（多目标：正确性 + 格式） |
+| `grpo/__init__.py` | 读 `config.yaml` → 生成 verl 的 hydra 覆盖参数 → 启动 `verl.trainer.main_ppo` |
+| `grpo/attribution.py` | 归因闭环（写 attribution.json，驱动数据回滚/再生） |
 
-标准 GRPO（DeepSeekMath 风格）+ 论文要求的定向 SFT 回退：
-
-1. **一次 rollout 出 G 条**（`_generate_group`，`GRPOConfig.group_size`）
-   同一 prompt 复制 G 份，温度采样生成 G 个回答。**当前 `group_size = 8`**（要求值）。
-2. **打分**（`composite_reward`，多目标奖励加权和）：
-   - `correctness`（正确性）：与 gold 比，数值接近给高分（默认权重 1.0）。
-   - `format`（格式）：是否有 `<think>…</think>` 结构（默认 0.3）。
-   - `length`（长度）：过长轻微扣分（默认 0.0，关闭）。
-3. **组相对优势**：`A = (r_i − mean(r)) / std(r)`。
-   **比组内平均好→正分，差→负分**——没有绝对标准，全靠这 8 条互相比。
-4. **裁剪目标 + KL 惩罚**（`_train_one` 内）：
-   - 策略损失 `L = −E[min(ρ·A, clip(ρ, 1−ε, 1+ε)·A)]`（PPO 式裁剪，`clip_eps=0.2`）。
-   - KL 惩罚 `β·KL(π_θ ‖ π_ref)`（`beta=0.04`），用冻结的 `ref_model` 当锚点防止跑偏。
-5. **停滞回退**（`train` 循环）：连续 `stall_patience`（默认 25）步奖励无提升 →
-   触发 `targeted_sft`，拿最差的几条做几次监督训练救场（论文要求）。
-
----
-
-## 3. 两模型结构
-
-| 模型 | 角色 | 训练 |
-|---|---|---|
-| `model`（policy） | 当前策略 | 挂 LoRA、`requires_grad=True`、随 GRPO 更新 |
-| `ref_model` | KL 参照 | 同基座、**冻结**、不挂 LoRA |
-
-两模型用**同一个 `ModelConfig`** 加载（默认 `precision="fp16"`），保证精度一致。
+```
+hard_subset.jsonl
+      │  grpo/data.py  (convert_to_verl_parquet)
+      ▼
+hard_subset.parquet  ──┐
+                       │  grpo/__init__.py  (build_verl_overrides)
+                       │      GRPO + LoRA 覆盖参数
+                       ▼
+                verl.trainer.main_ppo  ──→  grpo/reward.py (compute_score)
+                       │                         ▲
+                       │  actor_rollout_ref.model.lora_rank
+                       ▼
+                checkpoints/stage2-grpo  (仅 LoRA 增量)
+```
 
 ---
 
-## 4. 启动方式
+## 2. GRPO 目标（verl 原生）
+
+对每道难题采样 `group_size` 条回答（`rollout.n`），按组内相对优势更新策略：
+
+```
+A_i = (r_i − mean(r)) / std(r)            # 组相对优势
+L   = −E[ min(ρ·A, clip(ρ, 1−ε, 1+ε)·A) ] + β·KL(π_θ ‖ π_ref)
+```
+
+- `group_size = 8`（论文要求）→ verl 的 `actor_rollout_ref.rollout.n=8`。
+- KL 系数 `beta=0.04` → verl 的 `actor.kl_loss_coef`。
+- 多目标奖励在 `grpo/reward.py`，经 `custom_reward_function` 接入 verl。
+
+---
+
+## 3. LoRA 怎么开
+
+由 `config.yaml` 的 `lora.*` 驱动，映射成 verl 的 hydra 覆盖：
+
+| config.yaml | verl 覆盖 |
+|---|---|
+| `lora.rank` | `actor_rollout_ref.model.lora_rank` |
+| `lora.alpha` | `actor_rollout_ref.model.lora_alpha` |
+| `lora.target_modules` | `actor_rollout_ref.model.target_modules`（verl 用 `"all-linear"`） |
+| `model.stage1_adapter` | `actor_rollout_ref.model.lora_adapter_path`（从 Stage-1 适配器起训） |
+
+> verl 的 LoRA 走 HuggingFace peft + FSDP，rollout 端需
+> `actor_rollout_ref.rollout.load_format=safetensors`（代码已默认设置）。
+
+---
+
+## 4. 启动
 
 ```bash
 # 必须提供 hard-subset（每行 {question, answer} 的难题集）
 bash run_grpo.sh --hard-subset data/golden/hard_subset.jsonl \
                  --stage1-adapter checkpoints/stage1 --max-samples 50
 # 或
-python -m grpo \
-    --hard-subset data/golden/hard_subset.jsonl \
-    --stage1-adapter checkpoints/stage1 --max-samples 50
+python -m grpo --hard-subset data/golden/hard_subset.jsonl \
+               --stage1-adapter checkpoints/stage1 --max-samples 50
 ```
 
-> 不带 `--hard-subset` 且 yaml 未设 `data.hard_subset` 会直接报错退出。
-> hard subset 来源：归因闭环（`attribution.py`）或 Stage-1 错误分析，亦可手工造小文件。
+`run_grpo.sh` 内部就是 `python -m grpo`：`grpo/__init__.py` 先转 parquet、
+再拼出 verl 覆盖参数、最后 `subprocess` 调用 `verl.trainer.main_ppo`。
 
-### 关键 CLI 参数（覆盖 yaml）
-| 参数 | 作用 |
+| CLI 参数 | 作用 |
 |---|---|
 | `--config` | yaml 路径（默认 `grpo/config.yaml`） |
 | `--hard-subset` | 难题 JSONL（必填） |
 | `--stage1-adapter` | 从 Stage-1 适配器起训 |
-| `--group-size` | G rollouts（默认 8） |
 | `--max-samples` | 难题使用上限（原型抽样） |
-| `--learning-rate` / `--beta` / `--temperature` | 训练超参 |
+| `--output-dir` / `--model-name` | 覆盖 yaml |
 
 ---
 
@@ -71,29 +94,42 @@ python -m grpo \
 
 ```yaml
 model:
-  model_name: "Qwen/Qwen3.5-9B"
-  precision: "fp16"          # 与 Stage 1 共用精度开关
-  stage1_adapter: null
+  name: "Qwen/Qwen3.5-9B"
+  stage1_adapter: null          # 可选 Stage-1 LoRA 适配器路径
+lora:
+  rank: 16
+  alpha: 32
+  target_modules: "all-linear"
 grpo:
-  group_size: 8              # 每次 rollout 8 条（要求值）
+  group_size: 8                 # -> rollout.n（每 prompt 8 条）
   temperature: 0.9
-  max_new_tokens: 1024
-  learning_rate: 1.0e-6
-  beta: 0.04                 # KL 系数
-  clip_eps: 0.2
-reward:
-  weights: { correctness: 1.0, format: 0.3, length: 0.0 }
-targeted_sft:
-  stall_patience: 25
-  targeted_sft_steps: 5
+  learning_rate: 3.0e-5         # verl 建议 LoRA 用 ~10x 全参 LR
+  beta: 0.04                    # -> actor.kl_loss_coef
+  clip_eps: 0.2                 # -> actor.clip_ratio
+rollout:
+  name: "vllm"                  # 或 "sglang" / "hf"
+reward:                         # 权重在 grpo/reward.py
+  correctness: 1.0
+  format: 0.3
 data:
   hard_subset: "data/golden/hard_subset.jsonl"
+  parquet_dir: "./data/rl"
 run:
   output_dir: "checkpoints/stage2-grpo"
+  n_gpus_per_node: 1            # 多卡改大
+  train_batch_size: 16          # 建议是 group_size 的倍数
 ```
 
 ---
 
 ## 6. 产出
 
-Stage-2 LoRA 适配器保存到 `run.output_dir`（默认 `checkpoints/stage2-grpo`）。
+仅保存 LoRA 增量到 `run.output_dir`（默认 `checkpoints/stage2-grpo`）。
+verl 的 `model.lora.merge` 控制是否把 LoRA 合并进基座再同步给 rollout 引擎。
+
+---
+
+## 7. 环境依赖
+
+verl + LoRA 训练需要：`verl`、`vllm`（或 `sglang`）、`ray`（verl 启动用）、
+`hydra-core`、`pandas`、`pyarrow`。见 `pyproject.toml`。

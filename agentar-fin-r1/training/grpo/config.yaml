@@ -1,44 +1,56 @@
-# Stage-2 GRPO config (paper §3.2 / §3.3)
-# Loaded by: python -m grpo  (training/grpo/__init__.py)
+# Stage-2 GRPO config (paper §3.3) — human-facing knobs only.
+# grpo/__init__.py translates these into verl hydra overrides at launch.
+# Real GRPO + LoRA training is done by the `verl` library (no hand-rolled math).
+#
+# Launch:  python -m grpo --hard-subset <jsonl> [--stage1-adapter <dir>]
+
 model:
-  model_name: "Qwen/Qwen3.5-9B"
-  stage1_adapter: null          # path to Stage-1 LoRA adapter to initialise from (optional)
-  # Single precision switch for the base model — shared with Stage 1.
-  #   fp16  -> full fp16 weights + LoRA, no quantisation (default)
-  #   bf16  -> full bf16 weights + LoRA, no quantisation
-  #   int4  -> 4-bit NF4 QLoRA (legacy low-VRAM mode)
+  name: "Qwen/Qwen3.5-9B"
+  # Optional Stage-1 LoRA adapter to warm-start from (verl: model.lora_adapter_path).
+  stage1_adapter: null
+  # Informational only — verl manages its own dtype / precision internally.
   precision: "fp16"
 
+lora:
+  rank: 16                 # verl recommends >=32 for 9B-class; raise if convergence is slow
+  alpha: 32
+  target_modules: "all-linear"
+  dropout: 0.05
+
 grpo:
-  group_size: 8                 # G rollouts per prompt (requirement: 8)
+  group_size: 8            # -> rollout.n : G rollouts per prompt (paper requirement: 8)
   temperature: 0.9
   top_p: 0.95
   max_new_tokens: 1024
   max_prompt_tokens: 2048
-  learning_rate: 1.0e-6
-  beta: 0.04                    # KL penalty coefficient (GRPO default)
-  clip_eps: 0.2                 # PPO clip epsilon
-  mu: 1                         # inner optimisation epochs per batch
-  epochs: 1                     # passes over the hard subset
-  warmup_steps: 0
-  max_grad_norm: 1.0
-  optimizer: "adamw"
+  learning_rate: 3.0e-5    # verl suggests ~10x the full-FT LR for LoRA
+  beta: 0.04               # KL coefficient -> actor.kl_loss_coef
+  clip_eps: 0.2            # PPO/GRPO clip epsilon -> actor.clip_ratio
+  mu: 1                    # inner optimisation epochs per batch
+  epochs: 1
+
+rollout:
+  name: "vllm"             # "vllm" or "sglang" (LoRA needs load_format=safetensors); "hf" = no engine
+  gpu_memory_utilization: 0.4
+  max_model_len: 4096
+  max_num_seqs: 64
 
 reward:
-  weights:
-    correctness: 1.0            # verifier-based (numeric / substring match to gold)
-    format: 0.3                 # <think>…</think> structure
-    length: 0.0                 # length penalty (off by default)
-
-targeted_sft:                   # paper: apply when GRPO stalls on a category
-  stall_patience: 25            # steps without reward improvement -> trigger
-  targeted_sft_steps: 5
+  correctness: 1.0         # verifier-based (numeric / substring match to gold)
+  format: 0.3              # <think>…</think> structure  (weights live in grpo/reward.py)
+  length: 0.0
 
 data:
   hard_subset: "data/golden/hard_subset.jsonl"   # from attribution loop / Stage-1 errors
-  max_samples: null             # null = full; e.g. 200 for a quick prototype
+  max_samples: null         # null = full; e.g. 200 for a quick prototype
+  parquet_dir: "./data/rl"  # where the converted verl parquet is written
 
 run:
   output_dir: "checkpoints/stage2-grpo"
+  project_name: "agentar-fin-r1"
+  experiment_name: "stage2-grpo"
+  n_gpus_per_node: 1        # raise for multi-GPU (verl FSDP + tensor-parallel rollout)
+  total_epochs: 1
+  train_batch_size: 16      # must be a multiple of group_size for clean GRPO groups
   log_every: 5
   seed: 42

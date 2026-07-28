@@ -99,10 +99,11 @@ model = apply_lora(model, cfg=cfg)
 
 ## 5. 与两阶段的关系
 
-- **Stage 1（`stage1_sft.train_stage1`）**：`__main__` 依据 `sft.yaml` 构造
-  `ModelConfig` 并透传给 `load_model` / `apply_lora`；SFT 的 `TrainingArguments`
-  另通过 `training.fp16` / `training.bf16` 控制 Trainer 的混合精度作用域，需与
-  `model.precision` 保持一致（fp16 权重 ↔ `fp16: true`）。
-- **Stage 2（`stage2_grpo.train_stage2`）**：policy 与 reference 两个模型都用同一个
-  `model_cfg` 加载（ref 冻结、不挂 LoRA 作 KL 锚点）；自定义 GRPO 训练循环直接在当前
-  模型 dtype（fp16）下做前向/反向，无需额外的 amp 开关。
+- **Stage 1（`sft.train_stage1`）**：`sft/__init__.py` 依据 `sft/config.yaml`
+  构造 `ModelConfig` 并透传给 `load_model` / `apply_lora`，再交给
+  `trl.SFTTrainer`。SFT 的 `TrainingArguments` 另通过 `training.fp16` /
+  `training.bf16` 控制 Trainer 的混合精度作用域，需与 `model.precision` 保持一致
+  （fp16 权重 ↔ `fp16: true`）。
+- **Stage 2（GRPO）**：模型与 LoRA 由 `verl` 自己在内部管理（见 `grpo/config.yaml`
+  的 `model.name` / `lora.*`），本模块**不参与** Stage 2 的加载；GRPO 的 KL 参照
+  策略也由 verl 的 reference worker 承担。

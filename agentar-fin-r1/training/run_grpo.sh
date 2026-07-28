@@ -2,21 +2,24 @@
 #
 # Stage 2 GRPO 启动脚本 (Agentar-Fin-R1 reproduction)
 # =====================================================
+# 实现：verl 库 + LoRA（GRPO 由 verl 原生提供，见 grpo/__init__.py）
+#
 # 用法:
 #   bash run_grpo.sh --hard-subset data/golden/hard_subset.jsonl \
 #                    --stage1-adapter checkpoints/stage1 --max-samples 50
-#   bash run_grpo.sh --help               # 查看 train 全部参数
+#   bash run_grpo.sh --help               # 查看全部参数
 #
 # 必填参数:
 #   --hard-subset <jsonl>   每行 {question, answer} 的难题集
-#                           来源：归因闭环 attribution.py，或数据流水线，或手工造一个小文件
+#                           来源：归因闭环 grpo/attribution.py，或数据流水线，或手工小文件
 #
 # 行为:
 #   1. 优先用 uv；若没装 uv，则在本目录建 .venv 并 pip install -e .
-#   2. 启动 grpo 模块（training/grpo/__init__.py）
-#      默认 group_size=8（每次 rollout 8 条比较），模型 Qwen/Qwen3.5-9B
-#      默认读 grpo/config.yaml，CLI 参数覆盖配置
-#      产出在 ./checkpoints/stage2-grpo（含停滞时回退的 targeted SFT 步骤）
+#   2. 启动 grpo 模块（training/grpo/__init__.py）：
+#      - 把 hard_subset.jsonl 转成 verl 的 parquet 格式
+#      - 用 grpo/config.yaml 生成 verl 的 hydra 覆盖参数
+#      - 调用 verl.trainer.main_ppo 跑 GRPO（group_size=8，LoRA）
+#      产出在 ./checkpoints/stage2-grpo（仅保存 LoRA 增量）
 #
 set -euo pipefail
 
@@ -42,7 +45,6 @@ else
 fi
 
 # ---- 2. 启动 Stage 2 GRPO ----
-# 未提供 --hard-subset 时给出明确提示再退出（train 本身也会校验）
 if ! echo " $* " | grep -q -- "--hard-subset"; then
   echo "[run_grpo] 错误: 必须提供 --hard-subset <jsonl>"
   echo "示例: bash run_grpo.sh --hard-subset data/golden/hard_subset.jsonl \\"
@@ -50,7 +52,7 @@ if ! echo " $* " | grep -q -- "--hard-subset"; then
   exit 1
 fi
 
-echo "[run_grpo] 启动训练 (模块: grpo)..."
+echo "[run_grpo] 启动训练 (模块: grpo / verl backend)..."
 $PY_RUN -m grpo "$@"
 
 echo "[run_grpo] 完成。检查点: ./checkpoints/stage2-grpo"

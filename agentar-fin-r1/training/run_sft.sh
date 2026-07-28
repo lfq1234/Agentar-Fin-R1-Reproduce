@@ -2,13 +2,15 @@
 #
 # Stage 1 SFT 启动脚本 (Agentar-Fin-R1 reproduction)
 # =====================================================
+# 实现：peft + LoRA + trl.SFTTrainer（掉包式实现，见 sft/__init__.py）
+#
 # 用法:
 #   bash run_sft.sh                      # 用默认 sft/config.yaml 完整跑
 #   bash run_sft.sh --max-financial 50   # 小规模试跑，快速验证流程
-#   bash run_sft.sh --help               # 查看 train 全部参数
+#   bash run_sft.sh --help               # 查看全部参数
 #
 # 行为:
-#   1. 优先用 uv (README 推荐)；若没装 uv，则在本目录建 .venv 并 pip install -e .
+#   1. 优先用 uv；若没装 uv，则在本目录建 .venv 并 pip install -e .
 #   2. 启动 sft 模块（training/sft/__init__.py）
 #      默认模型 Qwen/Qwen3.5-9B，金融 CoT 数据 antgroup/Agentar-DeepFinance-100K
 #      难度加权默认 complexity，产出在 ./checkpoints/stage1
@@ -37,8 +39,6 @@ else
 fi
 
 # ---- 2. 启动 Stage 1 SFT ----
-# 默认读 configs/sft.yaml；想改配置直接编辑该文件，或用 CLI 参数覆盖
-# 想合并数据流水线产出：--extra-data <jsonl>
 echo "[run_sft] 启动训练 (模块: sft)..."
 $PY_RUN -m sft "$@"
 
