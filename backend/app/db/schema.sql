@@ -1,0 +1,67 @@
+-- ============================================================
+-- Agentar-Fin-R1-Reproduce 后端 · 基础数据库新建设计文档（设计稿）
+-- ============================================================
+-- 本文档为"数据库新建"的设计说明，定义传统后端基础层（03）所需的
+-- 核心表结构与字段规划。本文档【不含可执行 DDL】；具体建表语句在
+-- 03 编码阶段由 ORM（开发期 create_all）或最终落地 SQL 生成。
+--
+-- 文档性质：设计 / 规划（评审通过后进入编码）
+-- 数据库类型：支持 PostgreSQL（主）与 SQLite（开发/测试）双选
+-- 关联需求：docs/03-传统后端基础层/需求文档.md、技术文档.md
+-- ============================================================
+--
+-- 一、通用约定
+--   - 所有表含 created_at；可更新表额外含 updated_at。
+--   - 外键级联删除（ON DELETE CASCADE），便于级联清理。
+--   - scene 取值：Banking / Securities / Insurance / Trust / MutualFunds
+--
+-- 二、表结构设计（字段规划）
+--
+--   1) users（用户，最小字段，03 不接鉴权）
+--      - id          主键，自增（PG: BIGSERIAL / SQLite: INTEGER AUTOINCREMENT）
+--      - username    用户名，唯一，非空
+--      - email       邮箱，可空
+--      - created_at  创建时间，非空，默认当前时间
+--      - updated_at  更新时间，非空，默认当前时间
+--      用途：标识对话归属用户；03 仅以 user_id 关联，不接登录。
+--
+--   2) conversations（会话）
+--      - id          主键，自增
+--      - user_id     用户外键 → users(id)，级联删除，非空
+--      - scene       领域场景（见通用约定），可空
+--      - title       会话标题，可空
+--      - created_at  创建时间
+--      - updated_at  更新时间
+--      用途：聚合一次或多轮对话；scene 用于归属领域专家与路由。
+--      索引：user_id（便于按用户查询会话）
+--
+--   3) messages（消息）
+--      - id               主键，自增
+--      - conversation_id  会话外键 → conversations(id)，级联删除，非空
+--      - role             角色：user / assistant / system，非空
+--      - content          消息内容，非空
+--      - scene            领域场景，可空
+--      - created_at       创建时间
+--      用途：存储每轮用户与助手消息，支撑历史回溯。
+--      索引：conversation_id（便于按会话查询消息）
+--
+--   4) agent_traces（多智能体轨迹，预留，03 暂不启用）
+--      字段规划：
+--      - id               主键，自增
+--      - message_id       消息外键 → messages(id)，级联删除
+--      - trace_json       多 agent 执行轨迹（PG: JSONB / SQLite: TEXT）
+--      - created_at       创建时间
+--      说明：02 当前 AgentResult 不含 trace；待 02 扩展 agent_trace 后再启用落库。
+--
+-- 三、建表策略（双轨，字段以 ORM 模型为单一事实来源）
+--   - 开发/测试期：以 ORM create_all 自动建表，字段以 models 定义为准。
+--   - 生产/人工：以本设计为准编写最终 DDL（schema.sql 落地版）。
+--   - 两轨字段必须保持一致；若本设计更新，同步更新 ORM 模型。
+--
+-- 四、SQLite 适配要点（编码实现时注意）
+--   - 自增主键：BIGSERIAL → INTEGER PRIMARY KEY AUTOINCREMENT
+--   - 外键：SQLite 默认不强制，需开启 PRAGMA foreign_keys = ON 才会级联
+--   - JSONB：SQLite 无 JSONB，改为 TEXT，应用侧 JSON 序列化/反序列化
+--   - 时间戳默认：CURRENT_TIMESTAMP 可用；建议应用侧同时写入时间
+--   - 索引：CREATE INDEX IF NOT EXISTS 语法 SQLite 同样支持
+-- ============================================================
