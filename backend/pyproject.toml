@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn>=0.29",
     "pydantic>=2.6",
     "httpx>=0.27",
+    "openai>=1.0",        # 01-模型接口：generate() 直连 OpenAI 兼容端点（含 vLLM /v1）
+    "pyyaml>=6.0",        # 01-模型接口：app/config 加载 YAML 配置
 ]
 
 [tool.uv]

@@ -1,0 +1,20 @@
+# 脱敏模板：复制为 config.yaml 后按需填写，并在 .env 中提供真实密钥
+# cp config.example.yaml config.yaml
+model:
+  mode: api                  # api | local
+  timeout: 120
+  max_retries: 2
+  api:
+    model_type: openai_chat
+    model_name: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://api.openai.com/v1
+    temperature: 0.3
+    stream: false
+  local:
+    model_type: openai_chat
+    model_name: qwen3-8b-finr1
+    api_key: EMPTY
+    base_url: http://localhost:8000/v1
+    temperature: 0.3
+    stream: false
