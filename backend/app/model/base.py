@@ -26,6 +26,12 @@ class ModelConfig:
     stream: bool = False
     timeout: int = 120
     max_retries: int = 2
+    # —— local 模式内部两种加载方式（联调补充）——
+    # loader: "vllm"        -> 连外部 vLLM OpenAI 兼容端点（LocalModel，见 vllm_local.py）
+    #         "transformers"-> 进程内直接 transformers 加载权重（LocalTransformerModel）
+    loader: str = "vllm"
+    # 进程内直载的权重目录；为空时回退 env MODEL_PATH，再回退默认 D:/models/Qwen3-0.6B
+    model_path: str = ""
 
 
 class ModelInterface(ABC):

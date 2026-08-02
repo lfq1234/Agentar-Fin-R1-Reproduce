@@ -18,6 +18,12 @@ model:
     base_url: http://localhost:8000/v1
     temperature: 0.3
     stream: false
+    # local 内部两种加载方式（loader）：
+    #   vllm        -> 连外部 vLLM/OpenAI 兼容端点（默认；需先起本地推理服务，如 tools/qwen_server.py）
+    #   transformers-> 后端进程内直接用 transformers 加载权重（不依赖外部服务；需 torch+transformers 运行时）
+    loader: vllm
+    # 进程内直载（loader=transformers）时的权重目录；为空则回退 env MODEL_PATH，再回退 D:/models/Qwen3-0.6B
+    model_path: ""
 
 # 嵌入模型配置（01 为 04 的 RAG 向量化扩展；api/local 双模式，与 model 段平行）
 emb:

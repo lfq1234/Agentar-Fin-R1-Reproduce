@@ -1,7 +1,7 @@
 # 联调用配置（本地 qwen3-0.6b，local 模式 + SQLite 落库）
 # 由 config.example.yaml 复制并填充；区别于 api 模式（需 OPENAI_API_KEY）。
 model:
-  mode: local                  # 联调：本地 vLLM/OpenAI 兼容端点（本仓 tools/qwen_server.py）
+  mode: local                  # 联调：本地模式（local 内部两种加载方式，见 config.local.loader）
   timeout: 180
   max_retries: 1
   api:
@@ -13,11 +13,16 @@ model:
     stream: false
   local:
     model_type: openai_chat
-    model_name: qwen3-0.6b     # 必须与 tools/qwen_server.py 的 MODEL_ID 一致
+    model_name: qwen3-0.6b
     api_key: EMPTY
-    base_url: http://localhost:9000/v1
+    base_url: http://localhost:9000/v1   # 仅 transformers 直载外的兜底/导出用；直载模式不发起请求
     temperature: 0.3
     stream: false
+    # —— local 内部两种加载方式（联调补充）——
+    # loader: vllm        -> 连外部 OpenAI 兼容端点（默认，零额外依赖，需先起 tools/qwen_server.py）
+    # loader: transformers-> 后端进程内直接用 transformers 加载权重（不依赖外部服务；需 torch 运行时）
+    loader: transformers
+    model_path: D:/models/Qwen3-0.6B     # 进程内直载的权重目录（可改用 env MODEL_PATH 覆盖）
 
 # 嵌入模型配置：当前 run() 的 RAG 为占位实现，不调用 get_embedder()，
 # 故 emb 段仅保留合法 schema 占位（local 指向模型服务，实际不会被请求）。
