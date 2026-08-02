@@ -1,89 +1,68 @@
-"""Stage 2 GRPO reward —— LLM-as-judge（加载模型判断，不做数值计算）。
+"""GRPO custom reward for Agentar-Fin-R1 (ms-swift external plugin).
 
-GRPO 不能用金标直接算 loss，需要"可验证奖励"。金融推理题多为开放/半开放，
-用规则做数值/字符串比对既脆弱又覆盖不全。本项目改为**加载一个裁判模型**，
-对每个 rollout 由模型判断"结论是否正确、推理是否合理、是否带 <think> 边界"，
-而不是在本地做数值计算。
+LLM-as-judge 裁判奖励：不写任何数值比对规则，调用独立部署的裁判模型
+（vLLM / swift deploy 起的 OpenAI 兼容 /v1 服务）对每个 rollout 打分。
+判定标准三合一：① 结论与 gold_answer 一致；② 推理合理无原则性错误；
+③ 含 <think>...</think> 边界（缺边界直接 0）。格式要求已并入 correct，
+不再单独设格式奖励。
 
-裁判模型以独立服务部署（OpenAI 兼容 /v1 接口，推荐 vLLM）：
-    vllm serve <judge_model> --port 8000 --gpu-memory-utilization 0.4
-reward 函数在训练循环里通过 HTTP 调它，不与训练抢同一进程的显存。
-
-judge 返回 JSON 数组，每项 {"correct": 0|1, "reason": "..."}；
-correct=1 当且仅当结论与标准答案一致、推理无原则性错误、且含 <think> 边界。
+注册方式（ms-swift 约定）：
+    1. 在 orms 注册表登记本类；
+    2. 训练命令用 --external_plugins 指向本文件 + --reward_funcs judge_reward。
 """
-from __future__ import annotations
 
 import json
 
 from openai import OpenAI
 
-
-JUDGE_SYSTEM = (
-    "你是一个严格的金融推理题裁判。下面会给你若干组"
-    "【问题】【标准答案】【待评判回答】。请逐组判断待评判回答是否："
-    "① 结论与标准答案一致；② 推理合理无原则性错误；③ 包含 <think>...</think> 思考过程。"
-    "三者缺一不可，缺 <think> 边界则 correct=0。"
-    "只输出一个 JSON 数组，长度与输入组数一致，每项为 "
-    '{"correct": 0或1, "reason": "简短理由"}。不要输出任何额外文字。'
-)
+from swift.rewards import ORM, orms
 
 
-def build_judge_prompt(triples):
-    """triples: [(query, gold, completion), ...] 拼成单条批量裁判 prompt。"""
-    lines = []
-    for i, (q, g, c) in enumerate(triples, 1):
-        lines.append(
-            f"第{i}组\n【问题】\n{q}\n【标准答案】\n{g}\n【待评判回答】\n{c}\n"
+class LLMJudgeReward(ORM):
+    """对每个 rollout 调用外部裁判模型打分，返回 [0.0, 1.0] 列表。
+
+    __call__ 签名遵循 ms-swift 约定：位置参数 completions（模型输出列表），
+    其余数据集列以 kwargs 透传（本任务需要 gold_answer / query）。
+    """
+
+    def __init__(self, base_url: str = "http://localhost:8000/v1",
+                 model: str = "Qwen/Qwen2.5-72B-Instruct",
+                 api_key: str = "EMPTY"):
+        super().__init__()
+        try:
+            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            self.model = self.client.models.list().data[0].id
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                "连不上裁判模型服务，请先 `swift deploy` 或 `vllm serve` 起好 /v1 端点。"
+            ) from e
+
+    def __call__(self, completions, gold_answer=None, **kwargs) -> list[float]:
+        # 一次性批量构造 prompt，一条 HTTP 调用让裁判对整批打分（省吞吐）。
+        batch = []
+        for comp, gold in zip(completions, gold_answer or []):
+            batch.append({"completion": comp, "gold_answer": gold})
+        prompt = (
+            "你是金融推理的裁判。对每组 (模型回答, 标准答案)，判断模型回答是否正确。\n"
+            "当且仅当满足全部条件时返回 1：① 结论与标准答案一致；"
+            "② 推理合理无原则性错误；③ 包含 <think>...</think> 边界。\n"
+            "只返回 JSON 数组，每项 {\"correct\": 0 或 1}。\n"
+            f"数据：{json.dumps(batch, ensure_ascii=False)}"
         )
-    return "\n".join(lines) + "\n请按系统指令输出 JSON 数组。"
-
-
-class LLMJudge:
-    """封装一个 OpenAI 兼容的裁判模型服务（如 vLLM）。"""
-
-    def __init__(self, base_url, model, api_key="EMPTY", temperature=0.0):
-        self.model = model
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
-        self.temperature = temperature
-
-    def score_batch(self, triples):
-        """整批评判，返回与 triples 等长的 float 列表（0/1）。
-
-        解析失败或长度不符时整批回退为 0.0（干净处理，不重试）。
-        """
-        n = len(triples)
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
-                temperature=self.temperature,
-                messages=[
-                    {"role": "system", "content": JUDGE_SYSTEM},
-                    {"role": "user", "content": build_judge_prompt(triples)},
-                ],
-                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,                  # 打分确定性
             )
-            text = resp.choices[0].message.content
-            obj = json.loads(text)
-            arr = obj["scores"] if isinstance(obj, dict) and "scores" in obj else obj
-            if not isinstance(arr, list) or len(arr) != n:
-                return [0.0] * n
-            return [float(item.get("correct", 0)) for item in arr]
-        except Exception:
-            return [0.0] * n
+            parsed = json.loads(resp.choices[0].message.content.strip())
+            rewards = [float(item.get("correct", 0)) for item in parsed]
+            if len(rewards) != len(completions):
+                rewards = [0.0] * len(completions)   # 长度不符 → 整批 0，不重试
+        except Exception:  # noqa: BLE001 —— 解析失败 / 服务异常：整批回退 0
+            rewards = [0.0] * len(completions)
+        return rewards
 
 
-def make_reward_funcs(judge: LLMJudge):
-    """返回 reward 函数列表，传给 GRPOTrainer(reward_funcs=...)。
-
-    整批一次性发给 judge（一次 HTTP 调用 / 步），避免逐条调用拖慢训练。
-    数据集需含 query / gold_answer 列（由 TRL 随 batch 透传给 reward 函数）。
-    """
-
-    def reward_judge(prompts, completions, query=None, gold_answer=None, **kwargs):
-        queries = list(query) if query is not None else [None] * len(completions)
-        golds = list(gold_answer) if gold_answer is not None else [None] * len(completions)
-        triples = list(zip(queries, golds, completions))
-        return judge.score_batch(triples)
-
-    return [reward_judge]
+# 注册到 ms-swift 的 orms 表，供 --reward_funcs judge_reward 引用。
+orms["judge_reward"] = LLMJudgeReward

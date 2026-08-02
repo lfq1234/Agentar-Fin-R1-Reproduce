@@ -89,7 +89,7 @@ GRPO 不是无监督 RL，它需要**可验证的 reward**。金融任务的 rew
 - 优点：策略干净，ref model = sft_merged 本身，KL 语义清晰。
 - 代价：merge 一次（不可逆，需保留 adapter 副本，见 sft/ §10）。
 
-**方案 B**：直接在带 Stage 1 adapter 的模型上继续 GRPO（TRL `GRPOTrainer` 支持 `peft_config`）。
+**方案 B**：直接在带 Stage 1 adapter 的模型上继续 GRPO（ms-swift `swift rlhf` 同样支持 `tuner_type=lora` 续训）。
 - 优点：省 merge。
 - 代价：ref model 需单独加载一份 sft_merged（否则 KL 计算会带上 adapter 漂移），工程稍绕。
 
@@ -115,7 +115,7 @@ lora_config = LoraConfig(
 
 ### 4.3 Reference Model
 
-GRPO 的 KL 项需要一个**冻结的 ref 策略**。方案 A 下 ref = `sft_merged`（即初始基座本身，PEFT 训练时基座自动冻结，可直接复用作为 ref）。TRL `GRPOTrainer` 会自动处理：当传入 `peft_config` 时，ref model = 未挂 adapter 的基座，无需手动加载第二份。
+GRPO 的 KL 项需要一个**冻结的 ref 策略**。方案 A 下 ref = `sft_merged`（即初始基座本身）。`swift rlhf --rlhf_type grpo` 在 `tuner_type=lora` 时自动以未挂 adapter 的基座作为 ref model，无需手动加载第二份。
 
 ---
 
@@ -156,8 +156,8 @@ judge_api_key` 即可。
 
 ### 5.3 批量调用（每步一次 HTTP，省吞吐）
 
-`reward_judge` 把整步的所有 `(query, gold, completion)` 三元组拼成一条 prompt，
-**一次 HTTP 调用**让裁判返回等长分数数组（`score_batch`）。相比逐条调用，
+`LLMJudgeReward.__call__` 把整步所有 `(completion, gold_answer)` 拼成一条 prompt，
+**一次 HTTP 调用**让裁判返回等长分数数组。相比逐条调用，
 在 `K=8 × grad_accum=8 = 64` 条 completion/步 下能把 judge 调用从 64 次降到 1 次。
 
 ### 5.4 干净兜底
@@ -165,16 +165,17 @@ judge_api_key` 即可。
 解析失败（非 JSON、长度不符、字段缺失）时整批回退为 `0.0`，**不重试、不多层
 try-except**。裁判温度设 `0.0` 保证打分确定性。
 
-### 5.5 数据列
+### 5.5 数据列与 reward 透传
 
-数据集每行 `{"query": ..., "gold_answer": ...}`；`build_dataset` 额外保留
-`query` 列，由 TRL 随 batch 透传给 reward 函数（`gold_answer` 同理）。
+数据集每行 `{"messages": [...], "gold_answer": ...}`；ms-swift 在 GRPO 下会把
+**所有额外数据集列**（如 `gold_answer`）以 kwargs 透传给 reward 函数的 `__call__`
+（`completions` 为位置参数），无需手写 `build_dataset` 透传逻辑。
 
 ### 5.6 难度加权（可选，首版可先不接）
 
 论文 §3.1 在 RL 阶段的延续：对 batch 内每个 prompt，按其 label 的归一化权重
 `w̃_ℓ`（来自 `weighting.py`）缩放其所有 rollout 的 loss 项。实现：在
-`GRPOTrainer.compute_loss` 外层按 prompt 权重缩放。首版先把 GRPO 单 epoch 跑通、
+`RLHFArguments` 外层按 prompt 权重缩放。首版先把 GRPO 单 epoch 跑通、
 reward 曲线正常，再接闭环。
 
 ---
@@ -184,9 +185,9 @@ reward 曲线正常，再接闭环。
 | 超参 | 值 | 备注 |
 | --- | --- | --- |
 | group size `K` | `8` | 每个 prompt 采 8 条 rollout |
-| num_generations | `8` | = K，TRL 参数 |
-| max_new_tokens | `1024` | rollout 长度，CoT 需要空间 |
-| temperature (rollout) | `0.7~1.0` | 高温探索；后期可退火到 0.5 |
+| num_generations | `8` | = K，`swift rlhf` 参数 |
+| max_completion_length | `1024` | rollout 长度，CoT 需要空间 |
+| temperature (rollout) | `0.9` | 高温探索；后期可退火到 0.5 |
 | top_p | `0.9` | |
 | learning_rate | `5e-6` | RL 阶段 lr 远小于 SFT，防策略崩溃 |
 | lr_scheduler | `constant_with_warmup` | RL 常用 |
@@ -196,10 +197,9 @@ reward 曲线正常，再接闭环。
 | per_device_train_batch_size | `1` | 单 prompt |
 | gradient_accumulation_steps | `8` | 等效 8 prompts/step |
 | num_train_epochs | `1~2` | RL 易过拟合 reward，少 epoch |
-| max_prompt_len | `2048` | |
-| max_completion_len | `1024` | |
-| bf16 | — | 不用，见下一行 |
-| fp16 | `True` | AMP 自动混合精度（与 SFT 一致，FP16 加载 + fp16=True 训练） |
+| max_prompt_length | `2048` | |
+| max_completion_length | `1024` | |
+| torch_dtype | `float16` | AMP 自动混合精度（与 SFT 一致，FP16 加载） |
 | gradient_checkpointing | `True` | rollout 阶段省显存 |
 
 > 显存：GRPO 要同时跑 policy（带 LoRA）+ ref（冻结基座）+ K 条 rollout 的 logits。Qwen3-8B + K=8 在 24GB 卡上吃紧，可降 K=4 或换 40GB+ 卡（A100/H100）。
@@ -211,64 +211,48 @@ reward 曲线正常，再接闭环。
 ```
 grpo/
 ├── README.md                  # 本文件
-├── configs/
-│   └── grpo_default.yaml
 └── src/
-    ├── rewards.py             # LLM-as-judge 裁判 reward（批量打分，无数值计算）
-    ├── build_grpo_dataset.py  # 从 sft_metrics.json + attribution.json 组困难子集
-    ├── train_grpo.py          # 主训练入口（GRPOTrainer + LoRA）
-    └── attribution.py         # 归因闭环：per-label pass@1 + 数据回滚 + 再生触发
+    ├── rewards.py             # LLM-as-judge 裁判 reward（orms 注册 + 外部 vLLM）
+    └── train_grpo.py          # 主训练入口（RLHFArguments + rlhf_main，rlhf_type=grpo）
 ```
 
-### 7.1 train_grpo.py 主流程（伪代码）
+> 注：本目录用 ms-swift 的 `swift rlhf --rlhf_type grpo`，数据困难子集筛选与归因
+> 闭环（`build_grpo_dataset.py` / `attribution.py`）作为后续可选增强，首版先把
+> GRPO 单 epoch 跑通、reward 曲线正常，再接闭环。
+
+### 7.1 train_grpo.py 主流程（等价 Python API）
 
 ```python
-# 1. 初始策略 = Stage 1 merge 后的模型（FP16 加载）
-model, tokenizer = load_base_model("outputs/sft_merged")
-ref_model = None                    # TRL 在 peft_config 存在时自动用基座做 ref
+from swift.llm import RLHFArguments, rlhf_main
 
-# 2. 数据：困难子集 + 归因补数据
-ds = build_grpo_dataset(
-    sft_metrics="outputs/sft_metrics.json",
-    attribution="outputs/attribution.json",
-    sources=[FINOVA_REASONING, MATH500, DF100K_HARD],
+args = RLHFArguments(
+    rlhf_type="grpo",
+    model="outputs/sft_merged",          # 初始策略 = Stage 1 merge 后的模型
+    dataset="./grpo_data.jsonl",         # 每行 messages + gold_answer 列
+    tuner_type="lora",
+    lora_rank=32, lora_alpha=64, lora_dropout=0.05,
+    target_modules="all-linear",
+    torch_dtype="float16",
+    reward_funcs="judge_reward",         # 注册在 rewards.py 的 orms 键
+    external_plugins="./grpo/src/rewards.py",
+    num_generations=8, beta=0.04,
+    temperature=0.9, top_p=0.9,
+    max_completion_length=1024, max_prompt_length=2048,
+    learning_rate=5e-6, lr_scheduler_type="constant_with_warmup",
+    warmup_steps=50,
+    per_device_train_batch_size=1, gradient_accumulation_steps=8,
+    num_train_epochs=1, gradient_checkpointing=True,
+    output_dir="outputs/grpo_lora_adapter",
 )
-# ds 每条带: query, gold_answer, scene, task, label
-
-# 3. reward（LLM-as-judge；judge 服务在 train_grpo.py 配置区填好）
-judge = LLMJudge(base_url="http://localhost:8000/v1", model="Qwen/Qwen2.5-72B-Instruct")
-reward_funcs = make_reward_funcs(judge)
-
-# 4. Trainer
-from trl import GRPOConfig, GRPOTrainer
-
-args = GRPOConfig(
-    num_generations=8, beta=0.04, learning_rate=5e-6,
-    max_prompt_length=2048, max_completion_length=1024,
-    temperature=0.9, per_device_train_batch_size=1,
-    gradient_accumulation_steps=8, fp16=True,
-    gradient_checkpointing=True, output_dir="outputs/grpo_lora_adapter",
-)
-
-trainer = GRPOTrainer(
-    model=model, args=args, train_dataset=ds,
-    reward_funcs=reward_funcs, peft_config=lora_config,
-    # 难度加权：通过自定义 callback 或子类化 compute_loss 注入 w̃_ℓ
-)
-trainer.train()
-trainer.save_model("outputs/grpo_lora_adapter")
+rlhf_main(args)
 ```
 
-### 7.2 reward 函数签名（TRL 约定）
+### 7.2 reward 函数签名（ms-swift 约定）
 
-TRL `GRPOTrainer` 的 `reward_funcs` 接受 `(prompts, completions, **kwargs)` 列表，
-返回 `list[float]`。`query` / `gold_answer` 等数据集列随 batch 以 kwargs 透传：
-
-```python
-def reward_judge(prompts, completions, query=None, gold_answer=None, **kwargs):
-    triples = list(zip(query, gold_answer, completions))
-    return judge.score_batch(triples)   # 整批一次 HTTP 调用，返回等长 [0/1]
-```
+自定义 reward 继承 `swift.rewards.ORM`，`__call__` 的位置参数 `completions` 为模型
+输出列表，其余数据集列（如 `gold_answer`）以 kwargs 透传，返回 `list[float]`。
+在 `rewards.py` 末尾用 `orms["judge_reward"] = LLMJudgeReward` 注册，训练命令用
+`--external_plugins ./grpo/src/rewards.py --reward_funcs judge_reward` 引用。
 
 ---
 
@@ -312,27 +296,36 @@ if label_stagnates(label, window=3):            # 连续 3 轮 pass@1 不升
 cd agentar-fin-r1/training
 
 # 标准 GRPO（FP16 LoRA，单/双卡 24GB+）
-PYTHONPATH=grpo/src python -m train_grpo \
-    --init-model outputs/sft_merged \
-    --data-sources finova_reasoning math500 df100k_hard \
-    --attribution outputs/attribution.json \
-    --group-size 8 --beta 0.04 --lr 5e-6 \
-    --max-prompt 2048 --max-completion 1024 \
-    --fp16 \
-    --output outputs/grpo_lora_adapter
+swift rlhf \
+    --rlhf_type grpo \
+    --model outputs/sft_merged \
+    --dataset ./grpo_data.jsonl \
+    --tuner_type lora \
+    --lora_rank 32 --lora_alpha 64 --lora_dropout 0.05 \
+    --target_modules all-linear \
+    --torch_dtype float16 \
+    --external_plugins ./grpo/src/rewards.py \
+    --reward_funcs judge_reward \
+    --num_generations 8 --beta 0.04 \
+    --temperature 0.9 --top_p 0.9 \
+    --max_completion_length 1024 --max_prompt_length 2048 \
+    --learning_rate 5e-6 --lr_scheduler_type constant_with_warmup --warmup_steps 50 \
+    --per_device_train_batch_size 1 --gradient_accumulation_steps 8 \
+    --num_train_epochs 1 --gradient_checkpointing true \
+    --output_dir outputs/grpo_lora_adapter \
+    --report_to wandb
 
 # 显存吃紧：降 group size（K=4）
-PYTHONPATH=grpo/src python -m train_grpo \
-    --init-model outputs/sft_merged \
-    --group-size 4 --beta 0.04 --lr 5e-6 \
-    --fp16 \
-    --output outputs/grpo_lora_adapter
+swift rlhf ... --num_generations 4 ...
 
-# merge → 最终模型
-python grpo/src/merge_lora.py \
-    --base outputs/sft_merged \
-    --adapter outputs/grpo_lora_adapter \
-    --out outputs/fin_r1_final
+# 或 Python API：python grpo/src/train_grpo.py
+
+# merge → 最终模型（复用 sft 的 merge 逻辑）
+swift export \
+    --model outputs/sft_merged \
+    --adapters outputs/grpo_lora_adapter \
+    --torch_dtype float16 \
+    --output_dir outputs/fin_r1_final
 ```
 
 ---
@@ -340,9 +333,9 @@ python grpo/src/merge_lora.py \
 ## 10. 风险与注意
 
 1. **reward hacking**：模型可能学会输出看似合理但错误的推理来骗过裁判。缓解：① 裁判由更强/独立模型担任，且判定标准含「结论一致 + 推理合理 + `<think>` 边界」三重约束；② KL 系数别太小（β=0.04）；③ 定期人工抽查 rollout 与裁判打分一致性。
-2. **KL 崩溃**：lr 过大或 beta 过小会导致策略漂离 ref 太远，rollout 质量雪崩。监控 `kl` metric，正常应 < 10；超 20 立即降 lr。
+2. **KL 崩溃**：lr 过大或 beta 过小会导致策略漂离 ref 太远，rollout 质量雪崩。监控 ms-swift 日志里的 `kl` metric，正常应 < 10；超 20 立即降 lr。
 3. **rollout 长度爆炸**：CoT 模型 RL 时易出现"越想越长"。加 `max_completion_length` 硬截断，并可加长度惩罚 `−0.001·len`。
 4. **显存**：K=8 + Qwen3-8B 在 24GB 卡上 rollout 阶段易 OOM。优先降 K 到 4，再不行换 40GB+ 卡（A100/H100）或先用 `Qwen/Qwen3-4B` 跑通流程再升档。
 5. **归因闭环未建好前**：首版可只用 Stage 1 困难子集 + 固定数据，不接动态归因；先把 GRPO 单 epoch 跑通、reward 曲线正常，再接闭环。
-6. **FP16 稳定性**：与 SFT 一致开 `fp16=True`(AMP)；RL 阶段 rollout 采样对数值精度更敏感，出现 NaN 优先降 lr，必要时把基座加载精度与训练精度解耦（加载 bf16 + 训练 fp16=True）作为兜底。
+6. **FP16 稳定性**：与 SFT 一致用 `torch_dtype=float16`(AMP)；RL 阶段 rollout 采样对数值精度更敏感，出现 NaN 优先降 lr，必要时把基座加载精度与训练精度解耦（加载 bf16 + 训练 fp16）作为兜底。
 6. **GRPO 收敛慢**：RL 通常比 SFT 慢 3–5 倍（每步要 K 次 rollout）。预期单 epoch 在 5K prompt × K=8 上约 8–12 小时（单 A100），24GB 消费卡更久。
