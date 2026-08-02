@@ -1,0 +1,20 @@
+# ===== 运行时产物（非源码，可重建） =====
+agentar.db
+*.db
+*.sqlite
+*.sqlite3
+runs/
+*.log
+_pytest_out*.log
+
+# ===== 调试 / 临时脚本与产物 =====
+tools/_*.py
+tools/_*.json
+tools/_*.log
+tests/_*.log
+tests/_*.json
+tests/_smoke_chat.json
+__pycache__/
+*.pyc
+.venv/
+venv/
