@@ -38,7 +38,7 @@ class Conversation(ConversationBase, table=True):
 
 
 class ChatRequest(ConversationBase):
-    """/v1/chat 请求契约（非表模型，兼作 FastAPI 请求体校验）。"""
+    """/api/v1/chat 请求契约（非表模型，兼作 FastAPI 请求体校验）。"""
 
     message: str = Field(min_length=1)
     user_id: Optional[int] = None  # 临时方案：请求体携带；接鉴权后改 token 解析
@@ -46,7 +46,7 @@ class ChatRequest(ConversationBase):
 
 
 class ChatResponse(ConversationBase):
-    """/v1/chat 响应契约（非表模型，兼作响应序列化）。
+    """/api/v1/chat 响应契约（非表模型，兼作响应序列化）。
 
     scene 回显会话级场景，便于前端对齐上下文。
     """

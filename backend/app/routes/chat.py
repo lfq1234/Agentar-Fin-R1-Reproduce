@@ -1,4 +1,4 @@
-"""HTTP 路由：/health、/v1/chat、/v1/analyze（传统 REST，均 async）。"""
+"""HTTP 路由：/api/health、/api/v1/chat、/api/v1/analyze（传统 REST，均 async）。"""
 from __future__ import annotations
 
 from typing import Optional

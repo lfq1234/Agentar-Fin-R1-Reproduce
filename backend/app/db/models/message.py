@@ -38,13 +38,13 @@ class Message(MessageBase, table=True):
 
 
 class AnalyzeRequest(MessageBase):
-    """/v1/analyze 请求契约（非表模型，兼作 FastAPI 请求体校验）。"""
+    """/api/v1/analyze 请求契约（非表模型，兼作 FastAPI 请求体校验）。"""
 
     message: str = Field(min_length=1)
 
 
 class AnalyzeResponse(MessageBase):
-    """/v1/analyze 响应契约（非表模型，兼作响应序列化）。
+    """/api/v1/analyze 响应契约（非表模型，兼作响应序列化）。
 
     scene 回显被分析请求的场景。
     """
