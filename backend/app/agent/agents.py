@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 
 from agentscope.agents import DialogAgent, ReActAgent
+from agentscope.message import Msg
 
 from app.agent.model_bridge import AgentarModel
 from app.agent.tools import build_toolkit
@@ -45,10 +46,41 @@ class ReActAgentX(ReActAgent):
             model_config_name=PLACEHOLDER_CONFIG_NAME,
             service_toolkit=toolkit,
             sys_prompt=sys_prompt,
+            max_iters=5,  # 联调加固：限制 ReAct 迭代，避免弱模型（qwen3-0.6b）空转
             verbose=False,
         )
         # 覆盖 AgentBase 加载的占位模型，改走 01 统一入口。
         self.model = AgentarModel(inner)
+
+    # —— 联调加固（2026-08-02）：小模型（如 qwen3-0.6b）ReAct 格式保真度不足，
+    # 常以缺 `response` 参数调用 `finish`，触发 AgentScope._acting 的
+    # `KeyError: 'response'`。此处对 `finish` 分支做容错：缺参时从内存回退到
+    # 最近一次非空消息作为答案，避免整条链路 500。正常（强模型）路径不受影响。 ——
+    def _acting(self, tool_call):  # type: ignore[override]
+        if isinstance(tool_call, dict) and tool_call.get("name") == "finish":
+            inp = tool_call.get("input") or {}
+            resp = inp.get("response") if isinstance(inp, dict) else None
+            if not resp:
+                resp = self._fallback_response()
+            return Msg(self.name, str(resp), "assistant")
+        return super()._acting(tool_call)
+
+    def _fallback_response(self) -> str:
+        try:
+            mem = self.memory.get_memory()
+        except Exception:
+            return ""
+        for m in reversed(mem):
+            c = getattr(m, "content", "")
+            if isinstance(c, list):
+                txt = " ".join(getattr(b, "text", str(b)) for b in c).strip()
+            elif isinstance(c, str):
+                txt = c.strip()
+            else:
+                txt = ""
+            if txt:
+                return txt
+        return ""
 
 
 class DialogAgentX(DialogAgent):
