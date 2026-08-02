@@ -2,7 +2,7 @@
 
 无 OPENAI_API_KEY / 无 vLLM / db.enabled=false 时也能跑：
 - 注入 fake `run`（跳过真实模型调用）；
-- 验证 /health、/v1/chat（无库跳过落库）、/v1/analyze。
+- 验证 /api/health、/api/v1/chat（无库跳过落库）、/api/v1/analyze。
 """
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def test_health(client: TestClient) -> None:
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/api/health").json() == {"status": "ok"}
 
 
 def test_chat(client: TestClient) -> None:
-    r = client.post("/v1/chat", json={"message": "你好", "user_id": 1})
+    r = client.post("/api/v1/chat", json={"message": "你好", "user_id": 1})
     assert r.status_code == 200
     body = r.json()
     assert "fake" in body["reply"]
@@ -52,7 +52,7 @@ def test_chat(client: TestClient) -> None:
 
 
 def test_analyze(client: TestClient) -> None:
-    r = client.post("/v1/analyze", json={"message": "基金定投"})
+    r = client.post("/api/v1/analyze", json={"message": "基金定投"})
     assert r.status_code == 200
     body = r.json()
     assert body["intent"] == "consult"
