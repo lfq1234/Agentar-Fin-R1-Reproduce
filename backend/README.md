@@ -7,17 +7,23 @@ Python + FastAPI 服务与 Agent 运行时。
 ```
 app/
 ├── main.py          # FastAPI 入口（/health, /v1/chat, /v1/analyze）
-├── routes/chat.py   # HTTP 路由
-├── agent/runner.py  # Agent 运行时：意图/槽位/工具规划/表达生成
-├── models/schemas.py# 请求/响应 schema
-└── services/inference.py  # 模型推理（加载 training 产出的检查点）
+├── routes/chat.py   # HTTP 路由（传统 REST，全 async）
+├── agent/           # 02 多智能体框架（仅调用 run()）
+├── db/
+│   ├── schema.sql   # 可执行生产建表 DDL（users/conversations/messages/agent_traces）
+│   └── models/      # SQLModel 表模型 + 请求/响应校验模型（同处一包）
+│       ├── connection.py        # 引擎/会话/get_db/init_db（enabled 门控）
+│       ├── user.py              # User 表
+│       ├── conversation.py      # Conversation 表 + ChatRequest/ChatResponse
+│       └── message.py           # Message 表 + AnalyzeRequest/AnalyzeResponse
+└── services/        # chat_service / analyze_service（消费 agent.run，落库）
 tests/               # pytest 测试
 ```
 
 ## 运行
 
 ```bash
-uv pip install fastapi uvicorn pydantic httpx
+uv pip install fastapi uvicorn pydantic sqlmodel httpx pyyaml openai agentscope
 uvicorn app.main:app --reload --port 8000
 # 或
 python -m uvicorn app.main:app --reload --port 8000
@@ -31,5 +37,6 @@ pytest
 
 ## 说明
 
-当前 `agent/runner.py` 与 `services/inference.py` 为 stub，待 `agentar-fin-r1/training`
-产出模型后接入真实推理与工具调用。
+`agent/runner.py` 与 `services/inference.py` 为早期 stub，已删除；当前 `/v1/chat`、`/v1/analyze`
+由 `app/services/` 调用 02 的 `app.agent.run()` 实现，请求/响应校验模型合并在 `app/db/models/`
+（非表 SQLModel，底层即 Pydantic）。

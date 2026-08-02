@@ -1,22 +1,40 @@
-"""HTTP routes for chat / financial task analysis."""
+"""HTTP 路由：/health、/v1/chat、/v1/analyze（传统 REST，均 async）。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Optional
 
-from app.agent.runner import run_agent
-from app.models.schemas import AnalyzeRequest, AnalyzeResponse, ChatRequest, ChatResponse
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
-router = APIRouter(prefix="/v1", tags=["agent"])
+from app.db.models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ChatRequest,
+    ChatResponse,
+    get_db,
+)
+from app.services import analyze as analyze_service
+from app.services import chat as chat_service
+
+router = APIRouter(tags=["agent"])
 
 
-@router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
-    reply = run_agent(req.message, scene=req.scene, task=req.task)
-    return ChatResponse(reply=reply)
+@router.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
-    """Run the Agent capability pipeline: intent -> slot -> tool-plan -> expression."""
-    result = run_agent(req.message, scene=req.scene, task="ConsultationQA", structured=True)
-    return AnalyzeResponse(**result)
+@router.post("/v1/chat", response_model=ChatResponse)
+async def chat_endpoint(
+    req: ChatRequest,
+    db: Optional[AsyncSession] = Depends(get_db),
+) -> ChatResponse:
+    return await chat_service(req, db)
+
+
+@router.post("/v1/analyze", response_model=AnalyzeResponse)
+async def analyze_endpoint(
+    req: AnalyzeRequest,
+    db: Optional[AsyncSession] = Depends(get_db),
+) -> AnalyzeResponse:
+    return await analyze_service(req)
