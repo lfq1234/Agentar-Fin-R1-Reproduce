@@ -1,9 +1,9 @@
-# 模型接口配置（评审问题1 修复：顶层 timeout/max_retries 为全局默认，由工厂合并进子段）
-# 密钥不落库：以 ${ENV_VAR} 引用，加载时从环境变量替换（见 app/config/__init__.py）
+# 联调用配置（本地 qwen3-0.6b，local 模式 + SQLite 落库）
+# 由 config.example.yaml 复制并填充；区别于 api 模式（需 OPENAI_API_KEY）。
 model:
-  mode: api                  # api | local
-  timeout: 120               # 全局默认，工厂合并进所选子段（api/local）
-  max_retries: 2
+  mode: local                  # 联调：本地 vLLM/OpenAI 兼容端点（本仓 tools/qwen_server.py）
+  timeout: 180
+  max_retries: 1
   api:
     model_type: openai_chat
     model_name: gpt-4o
@@ -13,17 +13,17 @@ model:
     stream: false
   local:
     model_type: openai_chat
-    model_name: qwen3-8b-finr1
-    api_key: EMPTY           # 本地 vLLM 不校验密钥，占位即可
-    base_url: http://localhost:8000/v1
+    model_name: qwen3-0.6b     # 必须与 tools/qwen_server.py 的 MODEL_ID 一致
+    api_key: EMPTY
+    base_url: http://localhost:9000/v1
     temperature: 0.3
     stream: false
 
-# 嵌入模型配置（01 为 04 的 RAG 向量化扩展；与 model 段平行的 api/local 双模式）
-# 04 的 retrieval.py 通过 app.model.get_embedder() 调用本段完成文本向量化。
+# 嵌入模型配置：当前 run() 的 RAG 为占位实现，不调用 get_embedder()，
+# 故 emb 段仅保留合法 schema 占位（local 指向模型服务，实际不会被请求）。
 emb:
-  mode: api                  # api | local
-  timeout: 120               # 全局默认，工厂合并进所选子段（api/local）
+  mode: local
+  timeout: 120
   max_retries: 2
   api:
     model_type: openai_embedding
@@ -32,18 +32,16 @@ emb:
     base_url: https://api.openai.com/v1
   local:
     model_type: openai_embedding
-    model_name: bge-small-zh
-    api_key: EMPTY           # 本地 vLLM 不校验密钥，占位即可
-    base_url: http://localhost:8001/v1
+    model_name: qwen3-0.6b
+    api_key: EMPTY
+    base_url: http://localhost:9000/v1
 
-# —— 03-传统后端基础层：数据库配置 ——
+# —— 03-传统后端基础层：数据库配置（联调启用落库） ——
 db:
-  enabled: false             # true 时启用持久化；false 时系统无库也能启动并响应
-  type: sqlite               # sqlite | postgresql
-  sqlite_path: ./agentar.db  # type=sqlite 时的库文件路径（相对 backend/ 运行目录）
-  # type=postgresql 时启用下方 URL（不落库密钥，可用 ${ENV_VAR} 引用）：
-  # postgres_url: postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DB}
-  echo: false                # SQLAlchemy echo（调试用）
+  enabled: true                # 联调：启用持久化以验证续聊/落库
+  type: sqlite
+  sqlite_path: ./agentar.db
+  echo: false
 
 # —— 03-传统后端基础层：服务配置 ——
 server:
