@@ -20,5 +20,12 @@ npm run preview
 
 ## 接入后端
 
-`src/App.tsx` 通过 `POST /api/v1/chat` 调用 [`backend`](../backend/) 的 Agent 运行时。
-后端就绪后，把 `agent/runner.py` 与 `services/inference.py` 从 stub 接为真实推理即可。
+`src/api/client.ts` 通过 `/api/v1/chat`、`/api/v1/analyze`、`/api/health` 调用 [`backend`](../backend/) 的 Agent 运行时（`app/routes/chat.py`）。后端就绪后，把 `app/agent/system.py` 的 `run()` 从 stub 接为真实推理即可。
+
+## 接口契约
+
+- `GET  /api/health`
+- `POST /api/v1/chat` → `{ message, scene?, user_id?, conversation_id? }` → `{ scene?, conversation_id?, reply, compliance_notes[], risk_flags[] }`
+- `POST /api/v1/analyze` → `{ message, scene? }` → `{ scene?, intent?, slots{}, tool_plan[], expression }`
+
+续聊 / 落库前提：后端 `db.enabled` 默认 `false`，且 `chat` 仅在「db 可用 且 传入 `user_id`」时返回 `conversation_id`。前端默认携带 `user_id=1`。

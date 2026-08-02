@@ -1,73 +1,54 @@
-import { useState } from "react";
-
-const SCENES = ["Banking", "Securities", "Insurance", "Trust", "MutualFunds"] as const;
+import { useChat } from "./hooks/useChat";
+import { Header } from "./components/Header";
+import { MessageList } from "./components/MessageList";
+import { ChatInput } from "./components/ChatInput";
+import { AnalyzePanel } from "./components/AnalyzePanel";
+import { ErrorBanner } from "./components/ErrorBanner";
 
 export function App() {
-  const [message, setMessage] = useState("");
-  const [scene, setScene] = useState<string>(SCENES[0]);
-  const [reply, setReply] = useState("");
-  const [loading, setLoading] = useState(false);
+  const {
+    message,
+    setMessage,
+    scene,
+    setScene,
+    history,
+    loading,
+    analyzing,
+    analyzeResult,
+    setAnalyzeResult,
+    error,
+    setError,
+    backendStatus,
+    send,
+    runAnalyze,
+    reset,
+  } = useChat();
 
-  async function send() {
-    if (!message.trim()) return;
-    setLoading(true);
-    try {
-      const res = await fetch("/api/v1/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, scene }),
-      });
-      const data = await res.json();
-      setReply(data.reply ?? JSON.stringify(data));
-    } finally {
-      setLoading(false);
-    }
-  }
+  // 最近一条助手回复作为分析目标（S4：全局分析入口，非每条消息内嵌）。
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
 
   return (
-    <main style={{ maxWidth: 760, margin: "40px auto", fontFamily: "system-ui, sans-serif" }}>
-      <h1>Agentar-Fin-R1 复现 · 交互演示</h1>
-      <p style={{ color: "#666" }}>
-        向金融 Agent 提问，验证意图识别 / 槽位填充 / 工具规划 / 表达生成。
-      </p>
+    <div className="app-shell">
+      <Header scene={scene} onSceneChange={setScene} onReset={reset} backendStatus={backendStatus} />
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
-      <label style={{ display: "block", marginBottom: 12 }}>
-        场景：
-        <select value={scene} onChange={(e) => setScene(e.target.value)}>
-          {SCENES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="app-main">
+        <section className="chat-area">
+          <MessageList messages={history} />
+          <div className="composer">
+            <ChatInput value={message} onChange={setMessage} onSend={send} loading={loading} />
+            <button
+              className="btn"
+              disabled={analyzing || !lastAssistant}
+              onClick={() => lastAssistant && runAnalyze(lastAssistant.content)}
+            >
+              {analyzing ? "分析中…" : "分析最近回复"}
+            </button>
+          </div>
+        </section>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
-          style={{ flex: 1, padding: 8 }}
-          value={message}
-          placeholder="例如：瑞士法郎兑加元现在报价多少？"
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-        />
-        <button onClick={send} disabled={loading} style={{ padding: "8px 16px" }}>
-          {loading ? "…" : "发送"}
-        </button>
+        <AnalyzePanel result={analyzeResult} loading={analyzing} onClose={() => setAnalyzeResult(null)} />
       </div>
-
-      {reply && (
-        <pre
-          style={{
-            background: "#f5f5f5",
-            padding: 16,
-            marginTop: 16,
-            whiteSpace: "pre-wrap",
-            borderRadius: 8,
-          }}
-        >
-          {reply}
-        </pre>
-      )}
-    </main>
+    </div>
   );
 }
