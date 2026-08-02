@@ -38,10 +38,8 @@ emb:
 # —— 03-传统后端基础层：数据库配置（复制为 config.yaml 后按需填写） ——
 db:
   enabled: false             # true 时启用持久化；false 时系统无库也能启动并响应
-  type: sqlite               # sqlite | postgresql
-  sqlite_path: ./agentar.db  # type=sqlite 时的库文件路径（相对 backend/ 运行目录）
-  # type=postgresql 时启用下方 URL（不落库密钥，可用 ${ENV_VAR} 引用）：
-  # postgres_url: postgresql+psycopg://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DB}
+  type: sqlite               # 仅 SQLite 后端
+  sqlite_path: ./agentar.db  # SQLite 库文件路径（相对 backend/ 运行目录）
   echo: false                # SQLAlchemy echo（调试用）
 
 # —— 03-传统后端基础层：服务配置 ——

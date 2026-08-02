@@ -1,7 +1,7 @@
 """03-数据层：异步引擎 / 会话 / get_db 依赖 / init_db，含 enabled 门控。
 
 - db.enabled=false：引擎/会话不构建，get_db 产出 None，系统无库也能启动并响应。
-- db.enabled=true ：按 config.db 构建异步引擎（sqlite+aiosqlite / postgresql+asyncpg），提供会话依赖。
+- db.enabled=true ：按 config.db 构建异步 SQLite 引擎（sqlite+aiosqlite），提供会话依赖。
 - 开发/测试期 init_db() 用 SQLModel.metadata.create_all 建表；生产以 schema.sql 为准。
 - 异步参考 tiangolo/full-stack-fastapi-template 的 core/db.py，但保留本项目的 enabled 短路设计。
 """
@@ -22,33 +22,21 @@ from app.config import config
 
 _db_cfg: dict = config.get("db", {}) or {}
 _ENABLED: bool = bool(_db_cfg.get("enabled", False))
-_TYPE: str = str(_db_cfg.get("type", "sqlite"))
 
 engine: Optional[AsyncEngine] = None
 async_session_maker: Optional[async_sessionmaker] = None
 
 if _ENABLED:
-    if _TYPE == "postgresql":
-        _url = _db_cfg.get("postgres_url")
-        if not _url:
-            raise ValueError("db.type=postgresql 但未配置 db.postgres_url")
-        # 异步 PG 需要 asyncpg 驱动：统一替换为 postgresql+asyncpg://
-        if _url.startswith("postgresql://"):
-            _url = _url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        elif _url.startswith("postgresql+psycopg://"):
-            _url = _url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-    else:
-        _path = Path(str(_db_cfg.get("sqlite_path", "./agentar.db"))).resolve()
-        _url = f"sqlite+aiosqlite:///{_path}"  # 异步 SQLite 需要 aiosqlite 驱动
+    # 仅支持 SQLite 后端：sqlite+aiosqlite://（异步驱动）
+    _path = Path(str(_db_cfg.get("sqlite_path", "./agentar.db"))).resolve()
+    _url = f"sqlite+aiosqlite:///{_path}"
     _echo = bool(_db_cfg.get("echo", False))
     engine = create_async_engine(_url, echo=_echo, future=True)
 
     # SQLite 默认不强制外键，需开启 PRAGMA 才能级联删除（监听底层 sync_engine）。
-    if _TYPE == "sqlite":
-
-        @event.listens_for(engine.sync_engine, "connect")
-        def _enable_sqlite_fk(dbapi_con, _record) -> None:  # noqa: ANN001
-            dbapi_con.execute("PRAGMA foreign_keys=ON")
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_fk(dbapi_con, _record) -> None:  # noqa: ANN001
+        dbapi_con.execute("PRAGMA foreign_keys=ON")
 
     async_session_maker = async_sessionmaker(
         bind=engine, class_=AsyncSession, expire_on_commit=False

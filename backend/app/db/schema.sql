@@ -55,17 +55,6 @@ CREATE TABLE IF NOT EXISTS agent_traces (
 );
 
 -- ============================================================
--- PostgreSQL 适配（生产若是 PG）：
---   1) id 改为：id BIGSERIAL PRIMARY KEY
---   2) 时间字段建议改为 TIMESTAMPTZ NOT NULL（替代 TEXT），应用侧仍写 UTC
---   3) agent_traces.trace_json 建议改为 JSONB（替代 TEXT）
---   4) 外键 / 索引 / 字段名 / 级联语义保持一致即可。
--- 示例（PG 版 users）：
---   CREATE TABLE IF NOT EXISTS users (
---       id          BIGSERIAL PRIMARY KEY,
---       username    TEXT NOT NULL UNIQUE,
---       email       TEXT,
---       created_at  TIMESTAMPTZ NOT NULL,
---       updated_at  TIMESTAMPTZ NOT NULL
---   );
+-- 本服务仅支持 SQLite 后端（见 app/db/models/connection.py），
+-- 无需 PostgreSQL 适配；建表以 SQLModel 元数据为单一事实来源。
 -- ============================================================
