@@ -1,8 +1,8 @@
 """05-后端联调：本地 qwen3-0.6b 端到端集成测试（TestClient）。
 
 前置：
-- backend 以 local 模式运行，config.yaml 的 model.local 指向本仓 tools/qwen_server.py（:9000）。
-- 模型服务已启动（anaconda python + 本地 Qwen3-0.6B）。
+- backend 以 local 模式运行，进程内 transformers 直载 `model.local.model_path`（默认 D:/models/Qwen3-0.6B），无需单独启动模型服务。
+- 运行后端用的解释器需含 torch+transformers（如 anaconda python）。
 - db.enabled=true（验证落库与续聊）。
 
 运行：

@@ -2,7 +2,7 @@
 
 ``get_model()`` 读取配置 ``model.mode``，校验合法性后返回对应实现：
 - ``api``    -> ``ApiModel``
-- ``local``  -> ``LocalModel``
+- ``local``  -> ``LocalTransformerModel``（进程内 transformers 直载，见 transformer_local.py）
 
 ``get_embedder()``（01 为 04 扩展）读取配置 ``emb.mode``，校验合法性后返回对应实现：
 - ``api``    -> ``ApiEmbedder``
@@ -21,7 +21,6 @@ from app.model.api.openai_api import ApiModel
 from app.model.base import EmbedConfig, EmbedderInterface, ModelConfig, ModelInterface
 from app.model.local.embed_local import LocalEmbedder
 from app.model.local.transformer_local import LocalTransformerModel
-from app.model.local.vllm_local import LocalModel
 
 _VALID_MODES = ("api", "local")
 _VALID_EMB_MODES = ("api", "local")
@@ -41,14 +40,8 @@ def get_model() -> ModelInterface:
             section[key] = model_cfg[key]
 
     if mode == "local":
-        # local 模式内部两种加载方式：vllm 端点（默认）/ transformers 进程内直载
-        loader = section.get("loader", "vllm")
-        local_cls = {"vllm": LocalModel, "transformers": LocalTransformerModel}.get(loader)
-        if local_cls is None:
-            raise ValueError(
-                f"model.local.loader 必须是 'vllm' 或 'transformers'，收到: {loader!r}"
-            )
-        return local_cls(ModelConfig(**section))
+        # local 模式统一走进程内 transformers 直载（外部端点加载方式已移除）。
+        return LocalTransformerModel(ModelConfig(**section))
     return ApiModel(ModelConfig(**section))
 
 

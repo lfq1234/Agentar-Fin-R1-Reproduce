@@ -1,22 +1,17 @@
-"""LocalTransformerModel：local 模式下「进程内直接加载权重」的第二种加载方式。
+"""LocalTransformerModel：local 模式下「进程内直接加载权重」的加载方式（唯一）。
 
-与 ``vllm_local.LocalModel``（连外部 vLLM 端点）并列，二者同属 ``model.mode=local``，
-由 ``config.local.loader`` 切换（见 ``factory.get_model``）：
-
-- ``loader: vllm``        -> ``LocalModel``        连外部 OpenAI 兼容端点（默认，零额外依赖）
-- ``loader: transformers``-> ``LocalTransformerModel`` 直接在后端进程内用 transformers 加载权重
+``model.mode=local`` 时由 ``factory.get_model`` 直接返回本类（外部端点加载方式已移除）。
 
 本类在**后端进程内**用 ``transformers.AutoModelForCausalLM.from_pretrained`` 加载本地
-检查点（默认 ``D:/models/Qwen3-0.6B``），不依赖任何外部推理服务进程。它实现与
-``LocalModel`` 完全相同的 ``ModelInterface``（``generate`` / ``build_agentscope_config``），
-因此上层的 ``services/`` 多智能体编排无需感知底层是端点还是直载。
+检查点（默认 ``D:/models/Qwen3-0.6B``），不依赖任何外部推理服务进程。它实现 ``ModelInterface``
+（``generate`` / ``build_agentscope_config``），上层 ``services/`` 多智能体编排无需感知底层。
 
 依赖与运行时（重要）：
 - 进程内直载需要 ``torch`` + ``transformers``。为避免污染无 GPU 的轻量运行环境，
-  这里**延迟 import**（仅在 ``loader=transformers`` 且实例化时才 import）；若运行时
-  未安装则会抛出清晰的错误提示，不影响 ``vllm`` / ``api`` 模式。
-- 联调期直载模式请用已含 ``torch+cuda+transformers`` 的 anaconda 运行后端
-  （与 ``tools/qwen_server.py`` 同一套环境，已验证可加载并推理）。
+  这里**延迟 import**（仅在首次 ``generate`` 且实例化后才 import）；若运行时未安装，
+  调用时会抛出清晰的错误提示，不影响 ``api`` 模式。
+- 联调期请用已含 ``torch+cuda+transformers`` 的解释器运行后端（如 anaconda），
+  无需单独启动任何外部推理服务。
 """
 from __future__ import annotations
 
@@ -33,10 +28,18 @@ class LocalTransformerModel(ModelInterface):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__(cfg)
-        model_path = cfg.model_path or os.environ.get("MODEL_PATH", _DEFAULT_MODEL_PATH).strip()
-        self._model_path = model_path
+        self._model_path = cfg.model_path or os.environ.get("MODEL_PATH", _DEFAULT_MODEL_PATH).strip()
         self._max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", "512"))
-        self._device, self._tokenizer, self._model = self._load(model_path)
+        # 惰性加载：构造时不触碰 torch / 权重，首次 generate 时才真正加载。
+        self._device = None
+        self._tokenizer = None
+        self._model = None
+
+    def _ensure_loaded(self) -> None:
+        """首次 generate 时加载 torch / transformers 并载入本地权重（惰性）。"""
+        if self._model is not None:
+            return
+        self._device, self._tokenizer, self._model = self._load(self._model_path)
 
     @staticmethod
     def _load(model_path: str):
@@ -47,8 +50,7 @@ class LocalTransformerModel(ModelInterface):
         except ImportError as exc:  # 运行时缺依赖时给出可操作的提示
             raise ModelInvokeError(
                 "LocalTransformerModel 需要 torch 与 transformers，但当前运行环境未安装。"
-                "请用已含 torch+cuda+transformers 的解释器运行后端（如 anaconda），"
-                "或改用 config.local.loader=vllm 连外部端点。"
+                "请用已含 torch+cuda+transformers 的解释器运行后端（如 anaconda）。"
             ) from exc
 
         print(f"[LocalTransformerModel] loading {model_path} ...", flush=True)
@@ -69,7 +71,7 @@ class LocalTransformerModel(ModelInterface):
         return device, tokenizer, model
 
     def build_agentscope_config(self) -> dict:
-        """导出 AgentScope openai_chat 配置（与 LocalModel 同形，供 services/ 编排复用）。
+        """导出 AgentScope openai_chat 配置（供 services/ 编排复用）。
 
         注意：实际推理走本类的 ``generate()``（进程内），此字典仅为「配置导出」契约，
         不被真实调用路径使用。
@@ -87,6 +89,7 @@ class LocalTransformerModel(ModelInterface):
         }
 
     def generate(self, prompt: str, **kwargs) -> str:
+        self._ensure_loaded()  # 首次调用才真正加载权重
         import torch  # 延迟 import，缺依赖时 generate 也会给出清晰错误
 
         messages = [{"role": "user", "content": prompt}]

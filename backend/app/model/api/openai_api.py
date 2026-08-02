@@ -1,6 +1,6 @@
 """ApiModel：云端 OpenAI 兼容端点（技术文档 §3.3 / §2 目标）。
 
-物理分离的一部分（与 LocalModel 各自成类、各自文件夹）。两者共享抽象接口
+物理分离的一部分（与 LocalTransformerModel 各自成类、各自文件夹）。两者共享抽象接口
 ``ModelInterface`` 与 ``build_agentscope_config`` 字段模板，但实现互不耦合。
 
 本期 ``generate()`` 直连 OpenAI SDK（评审问题3 已决策）。

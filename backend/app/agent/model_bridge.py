@@ -27,7 +27,7 @@ class AgentarModel:
     config_name: str = "agentar-bridge"
 
     def __init__(self, inner: ModelInterface) -> None:
-        # inner: 01 返回的 ModelInterface 实现（ApiModel / LocalModel）。
+        # inner: 01 返回的 ModelInterface 实现（ApiModel / LocalTransformerModel）。
         self._inner = inner
 
     @staticmethod

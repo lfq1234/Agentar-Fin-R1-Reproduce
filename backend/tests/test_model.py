@@ -13,7 +13,7 @@ from app import config as config_module
 from app.model import ModelInvokeError, ModelInterface, get_model
 from app.model.api.openai_api import ApiModel
 from app.model.base import ModelConfig
-from app.model.local.vllm_local import LocalModel
+from app.model.local.transformer_local import LocalTransformerModel
 
 
 def _make_config(mode: str = "api", **model_overrides) -> "config_module.Config":
@@ -69,7 +69,7 @@ def test_factory_returns_api(patch_config) -> None:
 def test_factory_returns_local(patch_config) -> None:
     patch_config("local")
     m = get_model()
-    assert isinstance(m, LocalModel)
+    assert isinstance(m, LocalTransformerModel)
 
 
 def test_factory_invalid_mode(patch_config) -> None:  # 评审问题5

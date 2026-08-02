@@ -1,11 +1,11 @@
-"""LocalEmbedder：本地 vLLM OpenAI 兼容嵌入端点（04 嵌入依赖，01 扩展）。
+"""LocalEmbedder：本地 OpenAI 兼容嵌入端点（04 嵌入依赖，01 扩展）。
 
-与 ``LocalModel`` 平行：物理分离的一部分。``embed()`` 同样直连 OpenAI SDK 的
-``embeddings.create``，仅 ``base_url`` 指向本地 vLLM 的 ``/v1``（如
+与 ``LocalTransformerModel`` 平行：物理分离的一部分。``embed()`` 同样直连 OpenAI SDK 的
+``embeddings.create``，仅 ``base_url`` 指向本地嵌入服务的 ``/v1``（如
 ``http://localhost:8001/v1``，需该端点加载的是嵌入模型）。
 
-关于 api_key（与 ``LocalModel`` 一致的处理）：本地 vLLM 不校验密钥，配置里的
-``EMPTY`` 是预期占位、可透传给 OpenAI 客户端（vLLM 会忽略它），因此直连场景
+关于 api_key（与 ``LocalTransformerModel`` 一致的处理）：本地端点不校验密钥，配置里的
+``EMPTY`` 是预期占位、可透传给 OpenAI 客户端（忽略它），因此直连场景
 **不**抛 ``ModelInvokeError``——真正的调用失败（连接失败 / 超时 / 5xx）才抛出。
 """
 from __future__ import annotations
