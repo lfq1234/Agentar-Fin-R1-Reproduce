@@ -47,3 +47,41 @@ class ModelInterface(ABC):
 
         异常：在 key 缺失 / 网络错误 / 超时时抛出 ``ModelInvokeError``（见 exceptions）。
         """
+
+
+@dataclass
+class EmbedConfig:
+    """单个嵌入模型的配置。
+
+    与 ``ModelConfig`` 平行：工厂（``factory.get_embedder``）把配置子段（api / local）
+    合并全局默认后，用 ``EmbedConfig(**section)`` 构造。
+    """
+
+    model_type: str  # 固定 "openai_embedding"
+    model_name: str
+    api_key: str
+    base_url: str
+    timeout: int = 120
+    max_retries: int = 2
+
+
+class EmbedderInterface(ABC):
+    """统一嵌入调用抽象接口。
+
+    与 ``ModelInterface`` 平行，供 04 的 RAG 向量化调用。底层同样是 OpenAI 兼容
+    端点（云端 API 或本地 vLLM 的 ``/v1/embeddings``），调用方只依赖此接口。
+    """
+
+    def __init__(self, cfg: EmbedConfig) -> None:
+        self.cfg = cfg
+
+    @abstractmethod
+    def build_agentscope_config(self) -> dict:
+        """返回 AgentScope openai_embedding 模型配置字典（供后续 services/ 编排复用）。"""
+
+    @abstractmethod
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """对一批文本做嵌入，返回与输入等长的向量列表（每条为 float 列表）。
+
+        异常：在 key 缺失 / 网络错误 / 超时时抛出 ``ModelInvokeError``（见 exceptions）。
+        """

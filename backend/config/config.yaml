@@ -19,6 +19,23 @@ model:
     temperature: 0.3
     stream: false
 
+# 嵌入模型配置（01 为 04 的 RAG 向量化扩展；与 model 段平行的 api/local 双模式）
+# 04 的 retrieval.py 通过 app.model.get_embedder() 调用本段完成文本向量化。
+emb:
+  mode: api                  # api | local
+  timeout: 120               # 全局默认，工厂合并进所选子段（api/local）
+  max_retries: 2
+  api:
+    model_type: openai_embedding
+    model_name: text-embedding-3-small
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://api.openai.com/v1
+  local:
+    model_type: openai_embedding
+    model_name: bge-small-zh
+    api_key: EMPTY           # 本地 vLLM 不校验密钥，占位即可
+    base_url: http://localhost:8001/v1
+
 # —— 03-传统后端基础层：数据库配置 ——
 db:
   enabled: false             # true 时启用持久化；false 时系统无库也能启动并响应

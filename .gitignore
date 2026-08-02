@@ -237,3 +237,6 @@ wandb/
 # Paper PDFs (large binaries, keep local only)
 *.pdf
 
+# Runtime artifacts (agent run outputs, do not commit)
+backend/runs/
+
