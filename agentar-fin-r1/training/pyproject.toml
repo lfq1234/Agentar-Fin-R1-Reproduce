@@ -5,18 +5,18 @@ description = "Two-stage (SFT + GRPO) training reproduction for Agentar-Fin-R1"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.3",
+    "ms-swift>=3.0",   # 训练框架：SFT / GRPO（rlhf_type=grpo）统一由 swift 驱动，不手搓训练循环
     "transformers>=4.45",
     "datasets>=2.20",
-    "accelerate>=0.34",
-    "peft>=0.12",
-    "trl>=0.16",   # GRPO：num_generations 命名 + reward 函数接收数据集其余列（reward_kwargs）
     "flash-attn>=2.6",
     "sentencepiece",
     "huggingface_hub>=0.25",
     "openai>=1.30",   # GRPO 裁判模型客户端（OpenAI 兼容 /v1，接 vLLM 或商业 API）
     "wandb",
 ]
-# 精度约定：基座统一 FP16 加载 + 训练 fp16=True(AMP)；不引入 bitsandbytes/QLoRA/4bit。
+# 精度约定：基座统一 FP16 加载（torch_dtype=float16）+ 训练 AMP；不引入 bitsandbytes/QLoRA/4bit。
+# 框架说明：SFT = swift sft（SwiftSftArguments），GRPO = swift rlhf --rlhf_type grpo（RLHFArguments），
+#           LoRA merge = swift export（SwiftExportArguments）。
 
 [build-system]
 requires = ["hatchling"]

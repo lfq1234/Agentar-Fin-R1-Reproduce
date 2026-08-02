@@ -53,57 +53,44 @@
 
 ---
 
-## 3. 数据加载：TRL SFTTrainer + load_dataset + formatting_func
+## 3. 数据加载：ms-swift `swift sft`
 
-> 直接复用 TRL 的 [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer)，**不自己写 Dataset / collate_fn / 训练循环**。
-> 数据用 `datasets.load_dataset` 读，每条样本经一个 `formatting_func` 拼成 chat 文本即可——这正是参考脚本的做法。
+> 直接复用 **ms-swift** 的 [`swift sft`](https://swift.readthedocs.io/en/latest/Instruction/SFT.html)，**不自己写 Dataset / collate_fn / 训练循环 / formatting_func / role_map**。
+> 数据集就是标准 `messages` 数组（{role, content}），ms-swift 按 Qwen3 的 chat 模板自动拼装、tokenize、构造 labels（只训 assistant 段），全部交给框架。
 
 ### 3.1 设计总览
 
 ```
 本地数据 (json / jsonl，每行一个 messages 数组)
-        │  load_dataset("json", data_files=...)
+        │  --dataset ./train_data.jsonl（ms-swift AutoPreprocessor 自动识别）
         ▼
-SFTTrainer
-        │  formatting_func(sample)：messages 数组 → 单条 chat 文本
-        │  SFTTrainer 内部：tokenize + packing/padding + 构造 labels（只训 assistant 段）
+swift sft（SwiftSftArguments）
+        │  chat 模板拼装 + tokenize + labels（只训 assistant 段）全由框架处理
         ▼
-训练（fp16=True, AMP）+ 保存 LoRA adapter
+训练（torch_dtype=float16, AMP）+ 保存 LoRA adapter
 ```
 
 三个关键决策：
 
 | 决策 | 选择 | 理由 |
 | --- | --- | --- |
-| 数据读取 | `datasets.load_dataset("json", ...)` | 标准、零样板；jsonl 逐行数组直接读 |
-| 文本拼装 | `formatting_func` | 把 `{role, content}` 数组按 Qwen 模板拼成 `<|im_start|>...<\|im_end|>` 文本 |
-| 预处理 | SFTTrainer 内部完成 | tokenize / padding / prompt-mask 全由 TRL 处理，不重复造轮子 |
+| 数据读取 | `--dataset ./train_data.jsonl` | ms-swift 自动识别 jsonl 的 messages 数组，零样板 |
+| 文本拼装 | 框架按模型模板处理 | 不再手写 `format_messages` / `role_map`，避免双重 `<think>` 包裹 bug |
+| 预处理 | `swift sft` 内部完成 | tokenize / padding / prompt-mask / loss mask 全由框架处理 |
 
 ### 3.2 thinking 边界处理（不包裹）
 
-数据里的 ASSISTANT.content **已经包含** `<think>...</think>` 边界（见 §2.2 示例）。`format_messages` **不做任何包裹**，只按 Qwen 模板补 `<|im_start|>` / `<|im_end|>` 边界：
-
-```python
-def format_messages(sample):
-    msgs = sample["messages"] if isinstance(sample, dict) else sample
-    parts = []
-    for m in msgs:
-        role = ROLE_MAP.get(m["role"].upper(), m["role"].lower())  # HUMAN→user 等
-        parts.append(f"<|im_start|>{role}\n{m['content']}<|im_end|>\n")
-    return "".join(parts)
-```
-
-即 thinking 边界原样传给 tokenizer，避免最常见的 bug——双重 `<think><think>` 包裹导致模型学错边界。
+数据里的 ASSISTANT.content **已经包含** `<think>...</think>` 边界（见 §2.2 示例）。交给 ms-swift 的 chat 模板后，这部分**原样进入文本**，框架不会重复包裹——彻底规避 TRL 时代手搓 `format_messages` 容易导致的双重 `<think><think>` 问题。
 
 ### 3.3 首次跑通必做的核对
 
-`SFTTrainer` 默认对整个文本算 loss（含 user 段）。如只想核对拼接效果，可在本地试跑一次 `format_messages` 并打印 decode 结果，确认 `<think>` 边界只出现一次、且 assistant 段的 `<think>...</think>` 完整保留。
+如只想核对拼接效果（无需 GPU），可用 ms-swift 的 `get_template` 把一个样本 encode 后 decode 打印，确认 `<think>` 只出现一次、且 assistant 段的 `<think>...</think>` 完整保留。
 
 ---
 
 ## 4. 难度感知加权（论文 §3.1，设计目标，本脚本暂未实现）
 
-论文 §3.1 的难度感知加权是设计目标，但当前 `train_sft.py` 走 TRL `SFTTrainer` 的标准**等权** NLL，不自定义 `compute_loss`。
+论文 §3.1 的难度感知加权是设计目标，但当前 `train_sft.py` 走 ms-swift `swift sft` 的标准**等权** NLL，不自定义 `compute_loss`。
 
 - 权重公式（`w̃_ℓ` 归一化难度权重）记录在 `report.md`，供后续接入参考。
 - 若要启用：要么在 `train_sft.py` 里继承 `Trainer` 改写 `compute_loss`（对 per-sample loss 按标签 ℓ 的权重加权），要么在**数据层**对困难标签做上采样。首版先把等权管线跑通即可。
@@ -112,25 +99,11 @@ def format_messages(sample):
 
 ---
 
-## 5. 模型加载（transformers，FP16）
+## 5. 模型加载（ms-swift，FP16）
 
-> 用 `transformers` 原生 API 加载，**统一 FP16**（`torch_dtype=torch.float16`）。训练阶段在 Trainer 设 `fp16=True`（AMP 自动混合精度），数值更稳。配置约定见 `../models/README.md`。
+> 模型加载与精度由 `swift sft` 统一管理，**统一 FP16**（`torch_dtype="float16"`）。框架内部用 transformers + accelerate 加载，AMP 自动混合精度，数值更稳。配置约定见 `../models/README.md`。
 
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-tokenizer.pad_token = tokenizer.eos_token      # Qwen3 默认无 pad，借 eos
-tokenizer.padding_side = "right"               # SFT 标签对齐
-
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    torch_dtype=torch.float16,                 # 统一 FP16 加载
-    device_map="auto",                         # 多卡 DDP 训练时去掉本行，交给 Trainer
-    trust_remote_code=True,
-)
-```
+CLI 中只需给 `--model Qwen/Qwen3-8B --torch_dtype float16`，无需手写 `AutoModelForCausalLM.from_pretrained`。
 
 显存档（Qwen3-8B）：
 
@@ -139,43 +112,26 @@ model = AutoModelForCausalLM.from_pretrained(
 | **FP16 + LoRA (r=64)** | **~16 GB + adapter 84MB** | **单张 24 GB（A5000/4090）** |
 | GRPO（Stage 2, K=8） | policy+ref+rollout logits | 至少 24 GB，建议 40GB+（或降 K=4） |
 
-> **FP16 稳定性**：开 `fp16=True`(AMP) 而非纯 fp16；出现 NaN 时降 lr / 加 warmup（详见 `../models/README.md` §4.2）。
+> **FP16 稳定性**：ms-swift 走 `torch_dtype=float16` + AMP；出现 NaN 时降 lr / 加 warmup（详见 `../models/README.md` §4.2）。
 
 ---
 
-## 6. PEFT + LoRA 配置
+## 6. LoRA 配置（ms-swift 参数）
 
 ### 6.1 LoRA 目标模块
 
-Qwen3 是 GQA + SwiGLU，可挂 LoRA 的线性层：`q_proj / k_proj / v_proj / o_proj / gate_proj / up_proj / down_proj`。
+Qwen3 是 GQA + SwiGLU。`--target_modules all-linear` 即覆盖全部线性层（含 `q/k/v/o_proj` 与 `gate/up/down_proj`），框架统一管理，无需手写 7 个模块名。
 
-### 6.2 推荐配置
-
-```python
-from peft import LoraConfig, get_peft_model
-
-lora_config = LoraConfig(
-    r=64,
-    lora_alpha=128,                 # 经验上 alpha = 2*r
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-    target_modules=["q_proj","k_proj","v_proj","o_proj",
-                    "gate_proj","up_proj","down_proj"],
-)
-
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()   # 预期 ~42M / 8B ≈ 0.5%
-```
+### 6.2 推荐配置（CLI 参数等价）
 
 | 参数 | 值 | 理由 |
 | --- | --- | --- |
-| `r` | 64 | 金融 CoT 需要一定容量；太小(r=8)欠拟合，太大(r=128)过拟合+显存涨 |
-| `alpha` | 128 | `alpha=2r` 是 LoRA 缩放经验值 |
-| `dropout` | 0.05 | 防过拟合，金融数据相对集中 |
-| `target_modules` | 全 7 个 | 只挂 attention 会丢失 FFN 上的知识注入，金融任务需全挂 |
+| `--lora_rank` | 64 | 金融 CoT 需要一定容量；太小(r=8)欠拟合，太大(r=128)过拟合+显存涨 |
+| `--lora_alpha` | 128 | `alpha=2r` 是 LoRA 缩放经验值 |
+| `--lora_dropout` | 0.05 | 防过拟合，金融数据相对集中 |
+| `--target_modules` | `all-linear` | 等价于手写全 7 个线性层 |
 
-> FP16 + LoRA 模式下 lr 建议从 `1e-4` 起；若训练出现 NaN/梯度溢出，先降到 `5e-5` 并加大 `warmup_steps`，必要时把 `fp16=True` 的 loss scaling 交给 AMP 自动处理（默认即可）。
+> FP16 + LoRA 模式下 lr 建议从 `1e-4` 起；若训练出现 NaN/梯度溢出，先降到 `5e-5` 并加大 `--warmup_steps`。
 
 ---
 
@@ -185,19 +141,18 @@ model.print_trainable_parameters()   # 预期 ~42M / 8B ≈ 0.5%
 
 | 超参 | 值 | 备注 |
 | --- | --- | --- |
-| optimizer | `adamw_torch` | 无 QLoRA，标准 AdamW |
+| optimizer | ms-swift 默认 AdamW | 无 QLoRA，标准 AdamW |
 | learning_rate | `1e-4` | LoRA 典型区间 1e-4 ~ 2e-4 |
 | num_train_epochs | `3` | 数据量 ~100K，3 epoch 够 |
 | per_device_train_batch_size | `1` | seq=8K 显存敏感 |
 | gradient_accumulation_steps | `16` | 等效 bs=16 |
-| max_seq_length | `8192` | SFTTrainer 的 `max_seq_length` |
+| max_length | `8192` | SwiftSftArguments 的 `max_length` |
 | weight_decay | `0.0` | LoRA 一般不加 |
-| fp16 | `True` | **AMP 自动混合精度**（FP16 加载基座 + fp16=True 训练）；勿用纯 fp16 全程 |
-| bf16 | — | 不用，见上一行 |
+| torch_dtype | `float16` | **AMP 自动混合精度**（FP16 加载基座 + 训练）；勿用纯 fp16 全程 |
 | gradient_checkpointing | `True` | 省显存 |
-| save_strategy | `steps` | 每 200 步存一次 |
+| save_steps | `200` | 每 200 步存一次 |
 | logging_steps | `10` | |
-| report_to | `wandb` | 不需要可视化可改 `none` 并去掉 `import wandb` |
+| report_to | `wandb` | 不需要可视化可改 `none` |
 
 ### 7.2 目录结构
 
@@ -205,46 +160,43 @@ model.print_trainable_parameters()   # 预期 ~42M / 8B ≈ 0.5%
 sft/
 ├── README.md                  # 本文件
 └── src/
-    ├── train_sft.py           # 主训练入口（transformers 加载 + peft lora + TRL SFTTrainer）
-    └── merge_lora.py          # 训练后把 adapter merge 回基座，产 sft_merged/
+    ├── train_sft.py           # 主训练入口（SwiftSftArguments + sft_main）
+    └── merge_lora.py          # 训练后把 adapter merge 回基座（swift export / SwiftExportArguments）
 ```
 
 ### 7.3 train_sft.py 主流程
 
 ```python
-# 1. 数据集（datasets 标准读法；每行一个 messages 数组）
-dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
+from swift.llm import SwiftSftArguments, sft_main
 
-# 2. tokenizer + 模型（FP16）
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "right"
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True)
-model = get_peft_model(model, LORA_CONFIG)
-
-# 3. SFTTrainer（formatting_func 负责拼 prompt，其余交给 TRL）
-trainer = SFTTrainer(
-    model=model, train_dataset=dataset,
-    formatting_func=format_messages, max_seq_length=8192,
-    tokenizer=tokenizer, args=TRAINING_ARGS,   # TRAINING_ARGS.fp16=True
+args = SwiftSftArguments(
+    model="Qwen/Qwen3-8B",
+    dataset="./train_data.jsonl",          # 每行一个 messages 数组，框架自动拼装
+    tuner_type="lora",
+    lora_rank=64, lora_alpha=128, lora_dropout=0.05,
+    target_modules="all-linear",
+    torch_dtype="float16",
+    learning_rate=1e-4, num_train_epochs=3,
+    per_device_train_batch_size=1, gradient_accumulation_steps=16,
+    max_length=8192, gradient_checkpointing=True,
+    save_steps=200, logging_steps=10,
+    output_dir="./outputs/sft_lora_adapter",
 )
-trainer.train()
-trainer.save_model(OUTPUT_DIR)                 # 只存 LoRA adapter
+sft_main(args)                              # 只存 LoRA adapter
 ```
 
 ### 7.4 merge_lora.py
 
 ```python
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from swift.llm import SwiftExportArguments, export_main
 
-base = AutoModelForCausalLM.from_pretrained(MODEL_PATH, torch_dtype=torch.float16)
-model = PeftModel.from_pretrained(base, OUTPUT_DIR)
-model = model.merge_and_unload()
-model.save_pretrained(OUTPUT_DIR / "sft_merged", safe_serialization=True)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-tokenizer.save_pretrained(OUTPUT_DIR / "sft_merged")
+args = SwiftExportArguments(
+    model="Qwen/Qwen3-8B",
+    adapters="./outputs/sft_lora_adapter",
+    torch_dtype="float16",
+    output_dir="./outputs/sft_merged",      # 完整 checkpoint
+)
+export_main(args)
 # sft_merged/ 即 Stage 2 GRPO 的初始策略
 ```
 
@@ -265,30 +217,43 @@ tokenizer.save_pretrained(OUTPUT_DIR / "sft_merged")
 
 ```bash
 cd agentar-fin-r1/training
+pip install -e .                      # 安装依赖（torch/ms-swift/transformers/datasets/wandb/openai）
 
-# 1. 直接用脚本默认配置跑（改 train_sft.py 顶部“配置区”切换模型/数据/超参）
-pip install -e .                      # 安装依赖（torch/transformers/peft/trl/datasets/wandb）
-python sft/src/train_sft.py
+# 1. SFT 训练（推荐 CLI，配置全在命令行）
+swift sft \
+    --model Qwen/Qwen3-8B \
+    --dataset ./train_data.jsonl \
+    --tuner_type lora \
+    --lora_rank 64 --lora_alpha 128 --lora_dropout 0.05 \
+    --target_modules all-linear \
+    --torch_dtype float16 \
+    --learning_rate 1e-4 --num_train_epochs 3 \
+    --per_device_train_batch_size 1 --gradient_accumulation_steps 16 \
+    --max_length 8192 --gradient_checkpointing true \
+    --save_steps 200 --logging_steps 10 \
+    --output_dir ./outputs/sft_lora_adapter \
+    --report_to wandb
 
-# 2. 训练前先核对 format_messages 拼接效果（无需 GPU 即可跑）
-python -c "import sys; sys.path.insert(0,'sft/src'); from train_sft import format_messages; \
-import json; print(format_messages(json.load(open('train_data.jsonl'))))"
+# 或 Python API：python sft/src/train_sft.py
 
-# 3. merge adapter → 完整 checkpoint（供 GRPO 用）
-python sft/src/merge_lora.py \
-    --base models/Qwen3-8B \
-    --adapter outputs/sft_lora_adapter \
-    --out outputs/sft_merged
+# 2. merge adapter → 完整 checkpoint（供 GRPO 用）
+swift export \
+    --model Qwen/Qwen3-8B \
+    --adapters ./outputs/sft_lora_adapter \
+    --torch_dtype float16 \
+    --output_dir ./outputs/sft_merged
+
+# 或 Python API：python sft/src/merge_lora.py
 ```
 
 ---
 
 ## 10. 风险与注意
 
-1. **thinking 边界对齐**：数据里 ASSISTANT.content 自带 `<think>...</think>`，`format_messages` 只补 chat 边界、不包裹 thinking；首次跑通前用 §9 第 2 条命令确认 `<think>` 只出现一次、未被双重包裹。
-2. **难度加权暂未启用**：当前走 SFTTrainer 标准等权 NLL；论文的难度感知加权（§4）需在接入 pass@k 评估后另行实现。
+1. **thinking 边界对齐**：数据里 ASSISTANT.content 自带 `<think>...</think>`，交给 ms-swift chat 模板后原样进入文本、不重复包裹；首次跑通前用 `get_template` encode 后 decode 确认 `<think>` 只出现一次。
+2. **难度加权暂未启用**：当前走 swift sft 标准等权 NLL；论文的难度感知加权（§4）需在接入 pass@k 评估后另行实现。
 3. **数据泄露**：评测用 Finova / MATH-500 必须从训练集去污（`data/` 的 Verification 阶段已做，但合并外部语料后需复查）。
 4. **过拟合**：3 epoch 在 100K 上可能过拟合，监控 holdout loss，若第 2 epoch 后上升则早停。
 5. **merge 不可逆**：`merge_and_unload` 后 adapter 无法拆回，务必先保留 `sft_lora_adapter/` 原始副本。
-6. **FP16 数值稳定性**：基座统一 fp16 加载，训练务必开 `fp16=True`(AMP)；偶发 NaN 时降 lr / 加 warmup（详见 `../models/README.md` §4.2、§9）。
-7. **多卡 DDP**：`train_sft.py` 里 `device_map="auto"` 仅适合单卡；多卡分布式训练去掉该行，由 `accelerate launch` 接管。
+6. **FP16 数值稳定性**：基座统一 `torch_dtype=float16` 加载，训练走 AMP；偶发 NaN 时降 lr / 加 warmup（详见 `../models/README.md` §4.2、§9）。
+7. **多卡 DDP**：用 `NPROC_PER_NODE=8 swift sft ...` 启动分布式，框架自动接管，无需手动 `device_map`。
