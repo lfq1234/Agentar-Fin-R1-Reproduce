@@ -6,7 +6,7 @@
 # 基座 Qwen3-8B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
 # 外部 72B LLM 裁判（fin_judge reward manager，见 fin_judge_reward.py）。
 #
-# 与旧 ms-swift 版（training/grpo/src/train_grpo.py）等价映射：
+# 与旧 ms-swift 版等价映射：
 #   num_generations=8          → actor_rollout_ref.rollout.n=8        (group size K)
 #   beta=0.04                  → actor_rollout_ref.actor.kl_loss_coef=0.04
 #   temperature=0.9 / top_p=0.9→ rollout.temperature / rollout.top_p
@@ -17,20 +17,20 @@
 #   use_vllm / colocate        → rollout.name=vllm（verl 原生 vLLM rollout）
 #   reward_funcs=judge_reward  → reward_model.reward_manager=fin_judge
 #
-# 运行顺序：① SFT → ② verl/merge_lora.py → ③ 本脚本
+# 运行顺序：① SFT → ② merge_lora.py → ③ 本脚本
 #
 # 用法：
 #   NPROC=1 \
 #   SFT_MERGED=./outputs/sft_merged \
 #   GRPO_DATA=./data/verl/grpo.parquet \
-#     bash training/verl/grpo/train_grpo.sh
+#     bash training/grpo/train_grpo.sh
 # ============================================================================
 set -xeuo pipefail
 
 SFT_MERGED=${SFT_MERGED:-./outputs/sft_merged}
 GRPO_DATA=${GRPO_DATA:-./data/verl/grpo.parquet}
 NPROC=${NPROC:-1}
-REWARD_SCRIPT=${REWARD_SCRIPT:-./training/verl/grpo/fin_judge_reward.py}
+REWARD_SCRIPT=${REWARD_SCRIPT:-./training/grpo/fin_judge_reward.py}
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \

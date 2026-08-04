@@ -8,10 +8,11 @@ rollout 用 `transformers.generate`、reward 同步阻塞，verl 用 vLLM rollou
 ## 目录结构
 
 ```
-training/verl/
+training/
 ├── README.md
 ├── sft/
-│   └── train_sft.sh              # Stage 1：Qwen3-8B + LoRA(r=64) SFT（FSDP）
+│   ├── train_sft.py              # Stage 1 超参持有 + 训练启动器（调用 verl.trainer.sft_trainer）
+│   └── train_sft.sh              # Stage 1 壳：设路径环境变量后调用 train_sft.py
 ├── grpo/
 │   ├── train_grpo.sh             # Stage 2：GRPO（vLLM rollout + LoRA r=32）
 │   └── fin_judge_reward.py       # LLM-as-judge reward manager（子类化 NaiveRewardManager）
@@ -24,7 +25,7 @@ training/verl/
 
 ```bash
 # 0) 准备数据（一次）
-python training/verl/data/prepare_verl_data.py \
+python training/data/prepare_verl_data.py \
     --input ./data/golden/golden.jsonl --out-dir ./data/verl
 # 或 DeepFinance-100K 本地副本：
 #   --input /path/to/deepfinance.parquet
@@ -32,11 +33,13 @@ python training/verl/data/prepare_verl_data.py \
 # 1) Stage 1 SFT
 NPROC=1 MODEL_PATH=Qwen/Qwen3-8B \
     SFT_DATA=./data/verl/sft.parquet \
-    bash training/verl/sft/train_sft.sh
+    bash training/sft/train_sft.sh
+# 或直接：
+#   python training/sft/train_sft.py
 # 产物 → ./outputs/sft_lora_adapter
 
 # 2) 合并 SFT LoRA
-python training/verl/merge_lora.py \
+python training/merge_lora.py \
     --base Qwen/Qwen3-8B \
     --adapter ./outputs/sft_lora_adapter \
     --output ./outputs/sft_merged
@@ -48,7 +51,7 @@ python training/verl/merge_lora.py \
 # 4) Stage 2 GRPO
 NPROC=1 SFT_MERGED=./outputs/sft_merged \
     GRPO_DATA=./data/verl/grpo.parquet \
-    bash training/verl/grpo/train_grpo.sh
+    bash training/grpo/train_grpo.sh
 # 产物 → ./outputs/grpo_lora_adapter
 ```
 

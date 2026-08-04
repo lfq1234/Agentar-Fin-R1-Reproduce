@@ -3,14 +3,14 @@
 verl SFT（verl.trainer.sft_trainer + model.lora_rank）产出的 adapter 目录为
 peft 兼容格式（adapter_config.json + adapter_model.safetensors）。本脚本用 peft
 把它 merge 回基座，得到完整 checkpoint（outputs/sft_merged），作为 Stage 2 GRPO
-的初始策略——等价于旧 ms-swift 版 training/sft/src/merge_lora.py（swift export）。
+的初始策略——等价于旧 ms-swift 版的 swift export 流程。
 
 前提：verl SFT 输出是标准 peft adapter。若 verl 版本把 LoRA 存成非 peft 格式，
 改用「SFT 阶段也走全参（去掉 model.lora_rank），GRPO 直接以 SFT checkpoint
 为基座 + 自己的 LoRA」这一路径，跳过 merge。
 
 用法：
-    python training/verl/merge_lora.py \
+    python training/merge_lora.py \
         --base Qwen/Qwen3-8B \
         --adapter ./outputs/sft_lora_adapter \
         --output ./outputs/sft_merged
