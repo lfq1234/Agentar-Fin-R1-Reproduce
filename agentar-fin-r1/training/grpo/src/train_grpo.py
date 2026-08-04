@@ -65,6 +65,15 @@ def get_grpo_args() -> RLHFArguments:
         top_p=0.9,
         max_completion_length=1024,             # CoT 需要空间
         max_prompt_length=2048,
+        # —— vLLM rollout（替代 transformers generate，3-5x 提速）——
+        # ms-swift GRPO 原生支持，colocate 模式让 vLLM 与训练同卡交替用显存，
+        # sleep_level=1 时 vLLM 在训练阶段休眠释放 KV-cache，避免 OOM。
+        use_vllm=True,
+        vllm_mode="colocate",                   # 同卡交替（单/双卡场景）；多卡可改 "remote"
+        vllm_gpu_memory_utilization=0.5,        # vLLM 占用显存比例，与训练权衡
+        vllm_tensor_parallel_size=1,            # vLLM 张量并行度；8B 单卡跑 1 即可
+        vllm_max_model_len=4096,                # prompt(2048)+completion(1024)+余量
+        sleep_level=1,                          # 0=不休眠, 1=释放 KV-cache(推荐), 2=释放权重
         # —— 优化 ——
         learning_rate=5e-6,                     # RL 阶段 lr 远小于 SFT，防策略崩溃
         lr_scheduler_type="constant_with_warmup",

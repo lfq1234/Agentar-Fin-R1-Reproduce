@@ -55,6 +55,17 @@ w_t = α·(1 − pass@k_cur) + β·max(0, pass@k_ref − pass@k_cur) + γ
 | Stage 1 | 金融知识注入 | 大规模 SFT + 加权训练 | Fin-R1-300K + 通用推理 |
 | Stage 2 | 难题攻坚 | GRPO（强化）+ 针对性 SFT | 困难子集 + 错误归因补充数据 |
 
+**训练框架：已迁移到 verl 0.8.0**（原 ms-swift 版保留在 `training/sft`、`training/grpo`，作遗留参考）。
+迁移理由：verl 在 GRPO 阶段用 vLLM rollout（PagedAttention，比 `transformers.generate` 快 3-5x）+
+Ray 式流水线，对本项目（Qwen3-8B + K=8 + 外部 72B 裁判）是代差级提速；ms-swift 的 rollout/reward
+同步阻塞瓶颈在 verl 内部解决，无需自改代码。
+
+- verl 实现见 [`training/verl/`](../training/verl/)：`sft/train_sft.sh`（Stage1 LoRA r=64）、
+  `grpo/train_grpo.sh` + `grpo/fin_judge_reward.py`（Stage2 GRPO + LLM-judge）、`merge_lora.py`、
+  `data/prepare_verl_data.py`。
+- 配置等价映射：原 `num_generations=8 → rollout.n=8`；`beta=0.04 → actor.kl_loss_coef=0.04`；
+  reward 由 `external_plugins` 改为子类化 `NaiveRewardManager`（`@register("fin_judge")`）。
+
 ### 4.3 归因闭环（Attribution Loop）
 
 按二维标签对预测错误分类，找性能洼地，输出 `attribution.json`：
@@ -79,6 +90,7 @@ w_t = α·(1 − pass@k_cur) + β·max(0, pass@k_ref − pass@k_cur) + γ
 
 - [x] 仓库结构与技术栈选型（uv + FastAPI + React/Vite）
 - [ ] 数据复刻：三级流水线跑通，产出小规模 golden 三元组
+- [x] 训练框架迁移 verl 0.8.0（SFT/GRPO/merge/data prep 代码就绪，见 `training/verl/`）
 - [ ] 训练复刻：加权 SFT（Stage 1）→ GRPO（Stage 2）→ 归因闭环
 - [ ] 后端 + Agent 运行时接入复刻模型
 - [ ] 前端交互页（对话 / 任务演示 / 评测可视化）
