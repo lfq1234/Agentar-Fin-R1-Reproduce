@@ -13,6 +13,10 @@
 - 联网新闻占位（`news_search`，真实 API 为后续需求，提供可插拔 provider）。
 
 定位：把本地金融文档转为可检索、可追溯的知识，供信息查询智能体（rag 角色）消费。
+
+> 演进（06 知识库-DuckDB）：切分 / BM25 / `Passage` / 归一化 已下沉到纯 Python
+> 共享模块 ``app.kb.chunking``，本文件仅 re-export 以保持 04 对外契约不变；
+> SQLite 后端实现见 ``app.kb.sqlite_store``，DuckDB 后端见 ``app.kb.store``。
 """
 from __future__ import annotations
 
@@ -26,16 +30,15 @@ from typing import Callable, Optional, Sequence
 
 from app.model import get_embedder
 
-
-@dataclass
-class Passage:
-    """一条检索片段（02 既有接口，新增字段带默认值以兼容）。"""
-
-    content: str
-    source: str = ""
-    score: float = 0.0
-    chapter: str = ""
-    effective_date: str = ""
+# 06 演进：以下纯 Python 符号下沉到 `app.kb.chunking`（零重依赖、无 torch），
+# 此处 re-export，04 既有调用方（tools.py 等）无需改动即可取到 `Passage` 等。
+from app.kb.chunking import (
+    Passage,
+    _Chunk,
+    _split_into_chunks,
+    _BM25,
+    _normalize,
+)
 
 
 @dataclass
@@ -50,118 +53,9 @@ class NewsItem:
 
 
 # --------------------------------------------------------------------------- #
-# 切分（chunking）
-# --------------------------------------------------------------------------- #
-
-class _Chunk:
-    __slots__ = ("text", "chapter")
-
-    def __init__(self, text: str, chapter: str = "") -> None:
-        self.text = text
-        self.chapter = chapter
-
-
-def _split_into_chunks(text: str, max_chars: int = 600, overlap: int = 80) -> list[_Chunk]:
-    """按标题/段落边界切分，长块带父标题上下文，保留结构。
-
-    - 以标题（`#` 标题或短句结尾标点）分节，节内文本带「父标题」上下文；
-    - 超长节按段落聚合，超过 `max_chars` 的块保留尾部 `overlap` 字符重叠；
-    - 表格/短段不单独打散，保持语义完整（设计 §5.3）。
-    """
-    text = text.replace("\r\n", "\n")
-
-    sections: list[tuple[str, str]] = []
-    heading = ""
-    buf: list[str] = []
-    for line in text.split("\n"):
-        stripped = line.strip()
-        # 标题启发式：markdown 标题（`#` 前缀）或冒号结尾的短标签（如「第一条：」）。
-        # 不以句号结尾的整句误判为标题（会吞掉正文），故句号结尾不视为标题。
-        is_heading = bool(re.match(r"^#{1,4}\s", stripped)) or (
-            stripped and len(stripped) <= 30 and stripped.endswith(("：", ":"))
-        )
-        if is_heading:
-            if buf:
-                sections.append((heading, "\n".join(buf).strip()))
-                buf = []
-            heading = stripped
-        else:
-            buf.append(line)
-    if buf:
-        sections.append((heading, "\n".join(buf).strip()))
-
-    chunks: list[_Chunk] = []
-    for hd, body in sections:
-        if not body:
-            continue
-        if len(body) <= max_chars:
-            chunks.append(_Chunk((hd + "\n" + body) if hd else body, hd))
-            continue
-        paras = [p for p in re.split(r"\n{1,}", body) if p.strip()]
-        cur = ""
-        for p in paras:
-            if len(cur) + len(p) + 1 <= max_chars:
-                cur = (cur + "\n" + p).strip() if cur else p
-            else:
-                if cur:
-                    chunks.append(_Chunk((hd + "\n" + cur) if hd else cur, hd))
-                cur = (p[-overlap:] + "\n" + p) if overlap else p
-        if cur:
-            chunks.append(_Chunk((hd + "\n" + cur) if hd else cur, hd))
-    return chunks
-
-
-# --------------------------------------------------------------------------- #
-# BM25（轻量关键词召回，与向量余弦融合）
-# --------------------------------------------------------------------------- #
-
-class _BM25:
-    """Okapi BM25，纯 Python 实现。
-
-    中文按字、英文按词（``\\w`` 在 Unicode 下含汉字）。生产环境可换 jieba 分词以
-    提升中文关键词召回；本期实现聚焦可用性与零额外依赖。
-    """
-
-    def __init__(self, corpus: Sequence[str], k1: float = 1.5, b: float = 0.75) -> None:
-        self.k1 = k1
-        self.b = b
-        self.docs = [self._tok(d) for d in corpus]
-        self.N = len(self.docs)
-        self.df: dict[str, int] = {}
-        for d in self.docs:
-            for t in set(d):
-                self.df[t] = self.df.get(t, 0) + 1
-        self.avgdl = (sum(len(d) for d in self.docs) / self.N) if self.N else 0.0
-
-    @staticmethod
-    def _tok(text: str) -> list[str]:
-        return re.findall(r"\w+", text.lower())
-
-    def scores(self, query: str) -> list[float]:
-        q = self._tok(query)
-        if not q:
-            return [0.0] * self.N
-        out = []
-        for d in self.docs:
-            dl = len(d)
-            s = 0.0
-            counts: dict[str, int] = {}
-            for t in d:
-                counts[t] = counts.get(t, 0) + 1
-            for t in q:
-                if t in self.df:
-                    f = counts.get(t, 0)
-                    idf = math.log(1 + (self.N - self.df[t] + 0.5) / (self.df[t] + 0.5))
-                    s += idf * (f * (self.k1 + 1)) / (
-                        f + self.k1 * (1 - self.b + self.b * dl / self.avgdl)
-                    )
-            out.append(s)
-        return out
-
-
-# --------------------------------------------------------------------------- #
 # 数学工具
 # --------------------------------------------------------------------------- #
+
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -170,18 +64,10 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
-def _normalize(xs: Sequence[float]) -> list[float]:
-    if not xs:
-        return []
-    lo, hi = min(xs), max(xs)
-    if hi == lo:
-        return [1.0] * len(xs)
-    return [(x - lo) / (hi - lo) for x in xs]
-
-
 # --------------------------------------------------------------------------- #
 # 检索器（核心）
 # --------------------------------------------------------------------------- #
+
 
 class Retriever:
     """本地 RAG 检索器：接入 → 切分 → 向量化 → 存储 → 混合检索。

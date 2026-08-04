@@ -55,3 +55,17 @@ server:
       - "*"
     headers:
       - "*"
+
+# —— 06-知识库（DuckDB 向量检索 + SQLite 文件存储） ——
+kb:
+  engine: duckdb              # duckdb（默认：SQLite 文件存储 + DuckDB 向量检索）| sqlite（纯 SQLite 回落）
+  path: ./kb/knowledge.db     # 知识库 SQLite 文件（文档/块/向量均落此文件；DuckDB 挂载它做向量检索）
+  embed_dim: 0                # 0=自适应（取首个 embedding 维度）；非 0 固定
+  use_vss: false              # 挂载的 SQLite 表无法建 DuckDB 原生 HNSW，保留占位（走精确扫描）
+  build_on_startup: false     # lifespan 阶段是否自动构建 kb/（默认手动 build 脚本）
+  chunk:
+    max_chars: 600
+    overlap: 80
+  local_embed:
+    enabled: false            # true 时启用进程内嵌入直载（不依赖外部嵌入服务）
+    model_path: ${LOCAL_EMBED_MODEL_PATH}   # 本地嵌入模型目录，由环境变量/本地 secret 注入，不入库

@@ -10,22 +10,26 @@ from __future__ import annotations
 
 from agentscope.service import ServiceToolkit
 
-from app.agent.retrieval import Passage, retrieve
+# 06 演进：检索后端切到 DuckDB/SQLite 知识库（get_knowledge_store 按 kb.engine 分发），
+# 不再使用 04 的占位 retrieve（空库）。导入链为纯 Python，无 torch 依赖。
+from app.kb import get_knowledge_store, Passage
+from app.kb.chunking import format_passages
 
 
 def lookup_knowledge(query: str) -> str:
-    """根据查询从知识库检索相关金融知识片段，返回拼接好的文本。
+    """根据查询从知识库检索相关金融知识片段，返回带完整溯源的结构化文本。
+
+    输出供下游总结智能体（raf）消费：每条片段标注来源/机构/领域/生效日/版本/相关度，
+    便于总结时准确引用与标注出处。
 
     Args:
         query (`str`): 用户问题或检索关键词。
 
     Returns:
-        `str`: 检索到的知识文本；无结果时返回提示。
+        `str`: 检索到的知识文本（含引用标记）；无结果时返回提示。
     """
-    passages: list[Passage] = retrieve(query)
-    if not passages:
-        return "（暂无检索结果）"
-    return "\n".join(f"- {p.content}（来源：{p.source}）" for p in passages)
+    passages: list[Passage] = get_knowledge_store().retrieve(query)
+    return format_passages(passages)
 
 
 def retrieve_documents(query: str) -> str:

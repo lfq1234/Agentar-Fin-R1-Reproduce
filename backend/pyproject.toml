@@ -12,7 +12,8 @@ dependencies = [
     "pyyaml>=6.0",        # 01-模型接口：app/config 加载 YAML 配置
     "agentscope==0.1.6",  # 02-多智能体：AgentScope 经典版（含 ReActAgent/DialogAgent/ServiceToolkit）
     "sqlmodel>=0.0.16",   # 03-传统后端基础层：ORM + Pydantic 统一（兼容 Pydantic v2）
-    "aiosqlite>=0.19",    # 03-传统后端基础层：异步 SQLite 驱动（sqlite+aiosqlite://）
+    "aiosqlite>=0.19",
+    "duckdb>=1.1.0",    # 06-知识库：DuckDB 向量存储（list_cosine_distance 需 >=1.1）    # 03-传统后端基础层：异步 SQLite 驱动（sqlite+aiosqlite://）
 ]
 
 [tool.uv]

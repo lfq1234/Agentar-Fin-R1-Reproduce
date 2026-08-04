@@ -1,6 +1,7 @@
 # ===== 运行时产物（非源码，可重建） =====
 agentar.db
 *.db
+kb/knowledge.db   # 06 知识库构建产物（SQLite 文件存储）
 *.sqlite
 *.sqlite3
 runs/
