@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from app.services.history.models import HistoryAccessError, SearchHit
-from app.services.history.store import _to_epoch_ms
+from app.db.history.models import HistoryAccessError, SearchHit
+from app.db.history.store import _to_epoch_ms
 
 
 async def keyword_search(

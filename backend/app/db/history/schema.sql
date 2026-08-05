@@ -1,0 +1,3 @@
+-- 本文件已迁移：07 会话历史 DDL 已并入 app/db/schema/sqlite/main.sql
+-- （session_meta / session_traces / trace_events / history_embeddings）。
+-- history store 的 _SCHEMA_PATH 现指向 app/db/schema/sqlite/main.sql。

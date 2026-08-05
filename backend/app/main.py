@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import config
 from app.db.models import init_db
-from app.services.history import init_history_db, install_history_tracing
+from app.db.history import init_history_db, install_history_tracing
 from app.model.exceptions import ModelInvokeError
 from app.routes import chat as chat_routes
 from app.routes import history as history_routes

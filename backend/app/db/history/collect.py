@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 
-from app.services.history.models import TraceEvent
+from app.db.history.models import TraceEvent
 
 
 def _now_ms() -> int:

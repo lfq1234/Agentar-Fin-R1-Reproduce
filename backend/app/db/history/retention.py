@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from app.services.history.models import HistoryStore
+from app.db.history.models import HistoryStore
 
 
 async def apply_retention(

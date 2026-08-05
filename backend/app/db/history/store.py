@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 import aiosqlite
 
-from app.services.history.models import (
+from app.db.history.models import (
     HistoryAccessError,
     HistoryEmbedding,
     SearchHit,
@@ -41,11 +41,11 @@ from app.services.history.models import (
     TraceEvent,
     TurnDetail,
 )
-from app.services.history.redact import redact_text, redact_value
+from app.db.history.redact import redact_text, redact_value
 
-logger = logging.getLogger("app.services.history")
+logger = logging.getLogger("app.db.history")
 
-_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema/sqlite/main.sql"
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +689,7 @@ class SessionHistoryStore(_RawDB):
         end: Optional[Any] = None,
         limit: int = 20,
     ) -> list[SearchHit]:
-        from app.services.history.search import keyword_search as _kw
+        from app.db.history.search import keyword_search as _kw
 
         async with self._lock:
             return await _kw(self, requester_id, query, scene=scene, start=start, end=end, limit=limit)
@@ -701,7 +701,7 @@ class SessionHistoryStore(_RawDB):
         *,
         top_k: int = 5,
     ) -> list[SearchHit]:
-        from app.services.history.search import semantic_search as _sem
+        from app.db.history.search import semantic_search as _sem
 
         async with self._lock:
             return await _sem(self, requester_id, query, top_k=top_k)
@@ -815,7 +815,7 @@ class SessionHistoryStore(_RawDB):
     async def export_session(
         self, requester_id: str, conversation_id: str, fmt: str = "md"
     ) -> str:
-        from app.services.history.export import render_export
+        from app.db.history.export import render_export
 
         detail = await self.get_session(requester_id, conversation_id, with_trace=True)
         if detail is None:
@@ -825,7 +825,7 @@ class SessionHistoryStore(_RawDB):
     async def get_session_for_review(
         self, requester_id: str, conversation_id: str
     ) -> str:
-        from app.services.history.export import render_review_context
+        from app.db.history.export import render_review_context
 
         detail = await self.get_session(requester_id, conversation_id, with_trace=True)
         if detail is None:

@@ -28,31 +28,20 @@ from app.db.knowledge.chunking import (
     _split_into_chunks,
 )
 
-# —— 唯一 schema 定义（DuckDB 引擎经 ATTACH 复用同一 DDL 建表） —— #
-CHUNKS_DDL = """
-CREATE TABLE IF NOT EXISTS chunks (
-    id              INTEGER PRIMARY KEY,
-    doc_id          TEXT,
-    title           TEXT,
-    doc_type        TEXT,
-    agency          TEXT,
-    domain          TEXT,
-    chapter         TEXT,
-    content         TEXT,
-    effective_date  TEXT,
-    version         TEXT,
-    source_path     TEXT,
-    embedding       TEXT,
-    dim             INTEGER
-)
-"""
+# —— 唯一 schema 定义：从 app/db/schema/duckdb/knowledge.sql 读取（DuckDB 引擎经
+#    ATTACH 复用同一 DDL 建表），不再内联，避免 schema 漂移 —— #
+from pathlib import Path as _Path
 
-KB_META_DDL = """
-CREATE TABLE IF NOT EXISTS kb_meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-)
-"""
+_SCHEMA_TEXT = (
+    _Path(__file__).resolve().parents[1] / "schema/duckdb/knowledge.sql"
+).read_text(encoding="utf-8")
+_SCHEMA_STMTS = [
+    s.strip().rstrip(";") + ";"
+    for s in re.split(r"(?=CREATE TABLE)", _SCHEMA_TEXT)
+    if s.strip().startswith("CREATE TABLE")
+]
+CHUNKS_DDL = _SCHEMA_STMTS[0]
+KB_META_DDL = _SCHEMA_STMTS[1]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

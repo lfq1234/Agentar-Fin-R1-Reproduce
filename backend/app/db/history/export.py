@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.services.history.models import SessionDetail
+from app.db.history.models import SessionDetail
 
 
 def _iter_events(node: dict, depth: int = 0):

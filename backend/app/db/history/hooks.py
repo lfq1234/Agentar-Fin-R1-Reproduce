@@ -16,8 +16,8 @@ import time
 import uuid
 from typing import Any
 
-from app.services.history.collect import build_events
-from app.services.history.store import get_history_store
+from app.db.history.collect import build_events
+from app.db.history.store import get_history_store
 
 
 async def _swallow(coro: Any) -> None:
@@ -43,7 +43,7 @@ def install_history_tracing() -> Any:
         resp = await original(req, db)
         # 采集逻辑整体包在 try 内：任何异常（含字段缺失）都不阻断主链路
         try:
-            # 延迟导入：避免在 import app.services.history 时拉起 agentscope 重依赖
+            # 延迟导入：避免在 import app.db.history 时拉起 agentscope 重依赖
             from app.agent.system import AgentResult
 
             if not store.enabled:
