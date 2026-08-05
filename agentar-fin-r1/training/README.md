@@ -15,7 +15,7 @@ training/
 │   └── train_sft.sh              # Stage 1 壳：设路径环境变量后调用 train_sft.py
 ├── grpo/
 │   ├── train_grpo.sh             # Stage 2：GRPO（vLLM rollout + LoRA r=32）
-│   └── fin_judge_reward.py       # LLM-as-judge reward manager（子类化 NaiveRewardManager）
+│   └── fin_judge_reward.py       # 混合奖励：compute_score（RLVR 闸门 + 答案比对 → LLM 裁判）
 ├── merge_lora.py                 # 合并 SFT LoRA → 完整 checkpoint
 └── data/
     └── prepare_verl_data.py      # golden.jsonl / DeepFinance-100K → verl parquet
@@ -65,22 +65,35 @@ NPROC=1 SFT_MERGED=./outputs/sft_merged \
 | GRPO 算法 | `rlhf_type=grpo` | `algorithm.adv_estimator=grpo` |
 | group size K | `num_generations=8` | `rollout.n=8` |
 | KL 系数 | `beta=0.04` | `actor.kl_loss_coef=0.04` |
-| reward | `external_plugins` + `reward_funcs` | `reward_model.reward_manager=fin_judge` |
-| judge 并发 | `ThreadPoolExecutor`（同文件） | `FinJudgeRewardManager.__call__` 整批并发（driver 级） |
+| reward | `external_plugins` + `reward_funcs` | `custom_reward_function`（path + name=compute_score） |
+| judge 并发 | `ThreadPoolExecutor`（同文件） | verl 逐样本调用 `compute_score`；开放题串行打裁判（原型足够，先跑通） |
 
 ## reward 实现要点（fin_judge_reward.py）
 
-verl 在 driver 进程**逐样本串行**调用 reward。原 ms-swift 的「整批一次 HTTP /
-并发子 batch」优化，只有在**整批收集后**才能发挥，因此这里**子类化
-`NaiveRewardManager`** 重写 `__call__`：先 decode 整批 response + ground_truth，
-再用 `ThreadPoolExecutor` 并发打裁判，最后回填 `reward_tensor`。
+简洁版：只暴露一个函数 `compute_score(data_source, solution_str, ground_truth,
+extra_info)`，由 verl 逐样本调用（见 `train_grpo.sh` 的 `custom_reward_function`
+接线）。**没有 RewardManager 子类、没有 ThreadPool、没有单例客户端**——逻辑是单条
+自上而下的 `if/return`，避免奖励里的回调嵌套。
 
-判定标准三合一（与原版一致）：① 结论与 gold_answer 一致；② 推理合理无原则性错误；
-③ 含 `<think>...</think>` 边界（缺边界直接 0）。
+三步式混合奖励（对齐论文「verifiable rewards + intricate reward structures」）：
 
-`@register("fin_judge")` 在 verl 加载本模块时注册进 reward manager 表；
-`train_grpo.sh` 里 `custom_reward_function.path` 指向本文件（触发导入 + 注册），
-`reward_model.reward_manager=fin_judge` 选中它。
+1. **格式闸门**：响应必须含 `<think>…</think>` 与（`\boxed{}` 或 `<answer>…</answer>`）。
+   缺任一标签 → 直接 0 分（论文强调「verifiable / auditable」输出）。
+2. **可验证题（verifiable=True）→ 规则比对（RLVR）**：数值近似（容差 1e-3）或归一化
+   字符串相等，正确 1.0 / 错误 0.0。确定性硬信号，GRPO 收得最稳。
+3. **开放题（verifiable=False）→ LLM 裁判（RLGHAI）**：规则判不了对错，交给外部
+   72B 裁判按 正确性+推理严谨性+格式 打 0~1 质量分；异常 → 0（不污染训练）。
+
+`train_grpo.sh` 接线：
+```
+actor_rollout_ref.rollout.reward_model.enable=False
+custom_reward_function.path=<本文件>
+custom_reward_function.name=compute_score
+```
+
+> 说明：移除原「子类化 `NaiveRewardManager` + 整批 ThreadPool 并发打裁判」的实现，
+> 换取极简可维护性。代价是开放题的裁判调用变为逐样本串行——原型/小 batch 跑通足够；
+> 若后续需要吞吐，可再把并发加回 `compute_score` 内部（局部优化，不影响接口）。
 
 ## 注意事项 / 已知风险
 
@@ -92,5 +105,6 @@ verl 在 driver 进程**逐样本串行**调用 reward。原 ms-swift 的「整�
    路径，跳过 merge。
 3. **显存**：8B + LoRA + K=8 + seq 4096 在 24G 卡上偏紧。`rollout.gpu_memory_utilization=0.5`
    可下调；多卡把 `rollout.tensor_model_parallel_size` / `NPROC` 调大。
-4. **裁判服务**：`fin_judge_reward.py` 顶部的 `JUDGE_BASE_URL / JUDGE_MODEL` 需与
-   实际部署一致；并发数 `JUDGE_MAX_WORKERS=8` 需裁判 vLLM 能承受。
+4. **裁判服务**：`fin_judge_reward.py` 顶部常量 `JUDGE_BASE_URL / JUDGE_MODEL`
+   （或用环境变量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY` 覆盖）需与
+   实际部署一致；开放题才走裁判，可验证题不打裁判。

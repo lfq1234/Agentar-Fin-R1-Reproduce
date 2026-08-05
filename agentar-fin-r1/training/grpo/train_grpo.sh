@@ -15,7 +15,7 @@
 #   learning_rate=5e-6         → actor.optim.lr=5e-6
 #   gradient_accumulation=8    → data.train_batch_size=64 + ppo_mini_batch_size=64
 #   use_vllm / colocate        → rollout.name=vllm（verl 原生 vLLM rollout）
-#   reward_funcs=judge_reward  → reward_model.reward_manager=fin_judge
+#   reward_funcs=judge_reward  → custom_reward_function.name=compute_score
 #
 # 运行顺序：① SFT → ② merge_lora.py → ③ 本脚本
 #
@@ -73,7 +73,6 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_dtype=float16 \
     actor_rollout_ref.rollout.reward_model.enable=False \
-    actor_rollout_ref.rollout.reward_model.reward_manager=fin_judge \
     custom_reward_function.path=${REWARD_SCRIPT} \
     custom_reward_function.name=compute_score \
     trainer.balance_batch=True \
