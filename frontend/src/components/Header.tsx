@@ -1,31 +1,21 @@
-import { SceneSelect } from "./SceneSelect";
-import type { BackendStatus, SceneOption } from "../types/agent";
+import type { BackendStatus } from "../types/agent";
 
 interface Props {
-  scene: SceneOption;
-  onSceneChange: (v: SceneOption) => void;
-  onReset: () => void;
+  onToggleSidebar: () => void;
   backendStatus: BackendStatus;
 }
 
-const STATUS_TEXT: Record<BackendStatus, string> = {
-  unknown: "连接中…",
-  ok: "后端在线",
-  down: "后端离线",
-};
-
-export function Header({ scene, onSceneChange, onReset, backendStatus }: Props) {
+export function Header({ onToggleSidebar, backendStatus }: Props) {
   return (
     <header className="app-header">
       <div className="app-title">
-        <h1>Agentar-Fin-R1 复现 · 交互演示</h1>
-        <span className={`status-dot ${backendStatus}`}>{STATUS_TEXT[backendStatus]}</span>
-      </div>
-      <div className="header-actions">
-        <SceneSelect value={scene} onChange={onSceneChange} />
-        <button className="btn" onClick={onReset}>
-          新对话
+        <button className="hamburger" onClick={onToggleSidebar} aria-label="切换侧边栏">
+          ☰
         </button>
+        <span
+          className={`status-bulb ${backendStatus}`}
+          title={backendStatus === "ok" ? "后端在线" : backendStatus === "down" ? "后端离线" : "连接中…"}
+        />
       </div>
     </header>
   );

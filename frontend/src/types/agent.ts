@@ -46,3 +46,14 @@ export interface UiMessage {
 }
 
 export type BackendStatus = "unknown" | "ok" | "down";
+
+// 前端本地会话（本期仅内存维护，刷新即丢失；后续可接后端会话列表接口）。
+export interface ChatSession {
+  id: string;
+  title: string;
+  history: UiMessage[];
+  conversationId: number | null;
+  scene: SceneOption;
+  createdAt: number;
+  updatedAt: number;
+}
