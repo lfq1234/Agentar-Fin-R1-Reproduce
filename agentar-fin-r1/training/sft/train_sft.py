@@ -47,6 +47,7 @@ SFT_OVERRIDES = [
     "model.lora_rank=64",
     "model.lora_alpha=128",
     "model.target_modules=all-linear",
+    "model.torch_dtype=float16",
     "model.use_gradient_checkpointing=true",
     f"trainer.default_local_dir={SAVE_PATH}",
     "trainer.total_epochs=3",

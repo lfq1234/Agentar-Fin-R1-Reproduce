@@ -57,7 +57,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_dtype=float16 \
     actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.dtype=float16 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.n=8 \
@@ -69,6 +71,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=True \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=8192 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.fsdp_config.param_dtype=float16 \
     actor_rollout_ref.rollout.reward_model.enable=False \
     actor_rollout_ref.rollout.reward_model.reward_manager=fin_judge \
     custom_reward_function.path=${REWARD_SCRIPT} \
