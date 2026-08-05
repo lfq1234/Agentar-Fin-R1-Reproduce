@@ -1,9 +1,9 @@
 """06 知识库构建脚本：扫描 kb/ 目录语料入库，生成 DuckDB 单文件。
 
 用法：
-    python -m app.kb.build            # 读取 config.kb.path 同级 kb/ 目录，清空重建
-    python -m app.kb.build --rescan   # 同上（默认即清空重建）
-    python -m app.kb.build --kb-dir /path/to/kb
+    python -m app.db.knowledge.build            # 读取 config.kb.path 同级 kb/ 目录，清空重建
+    python -m app.db.knowledge.build --rescan   # 同上（默认即清空重建）
+    python -m app.db.knowledge.build --kb-dir /path/to/kb
 
 设计文档关联：06 技术文档 §2（build.py）、§9.6（sample 语料 + 构建脚本）。
 """
@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-from app.kb import get_knowledge_store
+from app.db.knowledge import get_knowledge_store
 
 
 def main() -> int:

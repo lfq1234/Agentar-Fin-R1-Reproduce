@@ -6,8 +6,8 @@
   ``list_cosine_distance(embedding::FLOAT[], ?)`` 做余弦近邻，元数据预过滤先缩小候选集；
 - 双路独立召回（向量 + BM25）后取**并集**融合重排（评审 B1 修复）。
 
-切分 / BM25 / 归一化 / Passage 复用 ``app.kb.chunking``（纯 Python，无 torch 依赖）；
-SQLite schema（``CHUNKS_DDL``）由 ``app.kb.sqlite_store`` 单一定义，两后端共用。
+切分 / BM25 / 归一化 / Passage 复用 ``app.db.knowledge.chunking``（纯 Python，无 torch 依赖）；
+SQLite schema（``CHUNKS_DDL``）由 ``app.db.knowledge.sqlite_store`` 单一定义，两后端共用。
 
 设计文档关联：06 技术文档 §3（schema/向量检索）、§5（召回与重排）、§6（生命周期）。
 """
@@ -22,14 +22,14 @@ from typing import Optional, Protocol, Sequence, runtime_checkable
 
 import duckdb
 
-from app.kb.chunking import (
+from app.db.knowledge.chunking import (
     Passage,
     InconsistentDimensionError,
     _BM25,
     _normalize,
     _split_into_chunks,
 )
-from app.kb.sqlite_store import CHUNKS_DDL, KB_META_DDL
+from app.db.knowledge.sqlite_store import CHUNKS_DDL, KB_META_DDL
 
 
 def _domain_tags(domain: str) -> list[str]:

@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from app.history.models import HistoryAccessError, SearchHit
-from app.history.store import _to_epoch_ms
+from app.services.history.models import HistoryAccessError, SearchHit
+from app.services.history.store import _to_epoch_ms
 
 
 async def keyword_search(
@@ -92,7 +92,7 @@ async def semantic_search(
     if not rows:
         return []
     try:
-        from app.kb import get_knowledge_store
+        from app.db.knowledge import get_knowledge_store
 
         embedder = get_knowledge_store()._get_embedder()
         qvec = embedder.embed([query])[0]

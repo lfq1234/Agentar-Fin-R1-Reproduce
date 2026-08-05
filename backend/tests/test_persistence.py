@@ -13,7 +13,7 @@ from sqlmodel import SQLModel, select
 
 from app.agent.system import AgentResult
 from app.db.models import ChatRequest, Conversation, Message, User
-from app.services import chat_service
+from app.services.chat_service import chat_service
 
 
 @pytest_asyncio.fixture

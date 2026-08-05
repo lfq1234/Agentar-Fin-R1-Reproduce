@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from app.history.models import (
+from app.services.history.models import (
     HistoryAccessError,
     HistoryStore,
     HistoryEmbedding,
@@ -16,14 +16,14 @@ from app.history.models import (
     TraceEvent,
     TurnDetail,
 )
-from app.history.store import (
+from app.services.history.store import (
     NoopHistoryStore,
     SessionHistoryStore,
     get_history_store,
     init_history_db,
     reset_history_store,
 )
-from app.history.hooks import install_history_tracing
+from app.services.history.hooks import install_history_tracing
 
 __all__ = [
     "HistoryStore",

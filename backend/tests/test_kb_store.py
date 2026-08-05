@@ -12,8 +12,8 @@ import tempfile
 
 import pytest
 
-from app.kb.chunking import Passage
-from app.kb.store import DuckDBKnowledgeStore, InconsistentDimensionError, _Row
+from app.db.knowledge.chunking import Passage
+from app.db.knowledge.store import DuckDBKnowledgeStore, InconsistentDimensionError, _Row
 
 DIM = 8
 
@@ -93,7 +93,7 @@ def test_passage_carries_citation_metadata(store):
     assert p.title == "商业银行理财业务管理办法"
     assert p.version == "2"
     # 格式化输出应包含机构与标题，便于总结智能体引用
-    from app.kb.chunking import format_passage
+    from app.db.knowledge.chunking import format_passage
 
     text = format_passage(p, 1)
     assert "国家金融监督管理总局" in text
@@ -176,7 +176,7 @@ def test_dimension_inconsistency(store):
 
 def test_sqlite_backend_fallback():
     """SQLite 双后端回落（仅在 torch 可用时运行；无 torch 自动 skip）。"""
-    sqlite_store = pytest.importorskip("app.kb.sqlite_store")
+    sqlite_store = pytest.importorskip("app.db.knowledge.sqlite_store")
     s = sqlite_store.SQLiteKnowledgeStore(db_path=":memory:", kb_dir=None)
     s.set_embedder(SimpleEmbedder())
     n = s.ingest_text("银行理财风险提示内容说明。 " * 5, doc_id="b", domain="Banking")

@@ -12,8 +12,8 @@ from agentscope.service import ServiceToolkit
 
 # 06 演进：检索后端切到 DuckDB/SQLite 知识库（get_knowledge_store 按 kb.engine 分发），
 # 不再使用 04 的占位 retrieve（空库）。导入链为纯 Python，无 torch 依赖。
-from app.kb import get_knowledge_store, Passage
-from app.kb.chunking import format_passages
+from app.db.knowledge import get_knowledge_store, Passage
+from app.db.knowledge.chunking import format_passages
 
 
 def lookup_knowledge(query: str) -> str:

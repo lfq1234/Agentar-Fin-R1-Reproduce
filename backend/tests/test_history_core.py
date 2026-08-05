@@ -18,12 +18,12 @@ import tempfile
 import pytest
 import pytest_asyncio
 
-from app.history import collect
-from app.history import export as exportmod
-from app.history import models as M
-from app.history import redact
-from app.history import retention as retentionmod
-from app.history import store as storemod
+from app.services.history import collect
+from app.services.history import export as exportmod
+from app.services.history import models as M
+from app.services.history import redact
+from app.services.history import retention as retentionmod
+from app.services.history import store as storemod
 
 
 class FakeResult:

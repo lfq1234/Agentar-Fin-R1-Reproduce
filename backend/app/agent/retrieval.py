@@ -15,8 +15,8 @@
 定位：把本地金融文档转为可检索、可追溯的知识，供信息查询智能体（rag 角色）消费。
 
 > 演进（06 知识库-DuckDB）：切分 / BM25 / `Passage` / 归一化 已下沉到纯 Python
-> 共享模块 ``app.kb.chunking``，本文件仅 re-export 以保持 04 对外契约不变；
-> SQLite 后端实现见 ``app.kb.sqlite_store``，DuckDB 后端见 ``app.kb.store``。
+> 共享模块 ``app.db.knowledge.chunking``，本文件仅 re-export 以保持 04 对外契约不变；
+> SQLite 后端实现见 ``app.db.knowledge.sqlite_store``，DuckDB 后端见 ``app.db.knowledge.store``。
 """
 from __future__ import annotations
 
@@ -30,9 +30,9 @@ from typing import Callable, Optional, Sequence
 
 from app.model import get_embedder
 
-# 06 演进：以下纯 Python 符号下沉到 `app.kb.chunking`（零重依赖、无 torch），
+# 06 演进：以下纯 Python 符号下沉到 `app.db.knowledge.chunking`（零重依赖、无 torch），
 # 此处 re-export，04 既有调用方（tools.py 等）无需改动即可取到 `Passage` 等。
-from app.kb.chunking import (
+from app.db.knowledge.chunking import (
     Passage,
     _Chunk,
     _split_into_chunks,

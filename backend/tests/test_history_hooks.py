@@ -18,7 +18,7 @@ import types
 import pytest
 import pytest_asyncio
 
-# —— 在任何 app.history 导入前注入假依赖（避免 agentscope 真正加载） —— #
+# —— 在任何 app.services.history 导入前注入假依赖（避免 agentscope 真正加载） —— #
 _agent_system = types.ModuleType("app.agent.system")
 
 
@@ -33,14 +33,13 @@ _agent_system.AgentResult = _AgentResult
 _agent_system.__fake__ = True
 sys.modules.setdefault("app.agent", types.ModuleType("app.agent"))
 sys.modules["app.agent.system"] = _agent_system
-sys.modules.setdefault("app.services", types.ModuleType("app.services"))
 _chat_service_mod = types.ModuleType("app.services.chat_service")
 _chat_service_mod.__fake__ = True
 _chat_service_mod.chat = None
 sys.modules["app.services.chat_service"] = _chat_service_mod
 
-from app.history import hooks  # noqa: E402
-from app.history import store as storemod  # noqa: E402
+from app.services.history import hooks  # noqa: E402
+from app.services.history import store as storemod  # noqa: E402
 
 
 class _Resp:

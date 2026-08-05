@@ -4,7 +4,7 @@
 - 本模块是**文件存储的单一真相来源**：建表、写入（文档/块/embedding JSON）、
   生命周期（stats / list_docs / delete_doc / rebuild）全部落地到 SQLite 文件；
 - ``kb.engine=sqlite`` 时，本类也是完整回落实现（向量检索用纯 Python 余弦 + BM25）；
-- ``kb.engine=duckdb`` 时，``app.kb.store.DuckDBKnowledgeStore`` 通过 DuckDB
+- ``kb.engine=duckdb`` 时，``app.db.knowledge.store.DuckDBKnowledgeStore`` 通过 DuckDB
   ``ATTACH`` 挂载**同一个** SQLite 文件，仅在 SQL 端做向量检索（``list_cosine_distance``），
   写入与文件存储仍走本 schema。
 
@@ -20,7 +20,7 @@ import re
 import sqlite3
 from typing import Optional
 
-from app.kb.chunking import (
+from app.db.knowledge.chunking import (
     InconsistentDimensionError,
     Passage,
     _BM25,

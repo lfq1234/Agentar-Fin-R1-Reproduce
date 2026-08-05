@@ -10,9 +10,10 @@ from fastapi.responses import JSONResponse
 
 from app.config import config
 from app.db.models import init_db
-from app.history import init_history_db, install_history_tracing
+from app.services.history import init_history_db, install_history_tracing
 from app.model.exceptions import ModelInvokeError
 from app.routes import chat as chat_routes
+from app.routes import history as history_routes
 
 
 @asynccontextmanager
@@ -49,6 +50,7 @@ app.add_middleware(
 
 # 统一 /api 前缀：路由变为 /api/health、/api/v1/chat、/api/v1/analyze（前后端一致）。
 app.include_router(chat_routes.router, prefix="/api")
+app.include_router(history_routes.router, prefix="/api")
 
 
 @app.exception_handler(ModelInvokeError)

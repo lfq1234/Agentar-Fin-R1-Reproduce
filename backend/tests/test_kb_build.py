@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import tempfile
 
-from app.kb.store import DuckDBKnowledgeStore
+from app.db.knowledge.store import DuckDBKnowledgeStore
 
 DIM = 8
 

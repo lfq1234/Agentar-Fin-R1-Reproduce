@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from app.kb.chunking import Passage
+from app.db.knowledge.chunking import Passage
 
 _STORE = None
 
@@ -23,7 +23,7 @@ _STORE = None
 def get_kb_config() -> dict:
     """返回 kb 配置（合并默认值），缺段时返回默认 duckdb 配置。
 
-    ``app.config`` 在此惰性导入，使 import ``app.kb.store`` 跑 DuckDB 单测时
+    ``app.config`` 在此惰性导入，使 import ``app.db.knowledge.store`` 跑 DuckDB 单测时
     不触发配置加载（无 torch / 无 pyyaml 亦可）。
     """
     from app.config import config
@@ -54,11 +54,11 @@ def get_knowledge_store():
     path = kb["path"]
     kb_dir = os.path.dirname(os.path.abspath(path))
     if engine == "sqlite":
-        from app.kb.sqlite_store import SQLiteKnowledgeStore
+        from app.db.knowledge.sqlite_store import SQLiteKnowledgeStore
 
         _STORE = SQLiteKnowledgeStore(db_path=path, kb_dir=kb_dir)
     else:
-        from app.kb.store import DuckDBKnowledgeStore
+        from app.db.knowledge.store import DuckDBKnowledgeStore
 
         _STORE = DuckDBKnowledgeStore(
             sqlite_path=path,

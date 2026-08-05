@@ -13,8 +13,8 @@ from app.db.models import (
     ChatResponse,
     get_db,
 )
-from app.services import analyze as analyze_service
-from app.services import chat as chat_service
+from app.services.analyze_service import analyze as analyze_service
+from app.services.chat_service import chat as chat_service
 
 router = APIRouter(tags=["agent"])
 
