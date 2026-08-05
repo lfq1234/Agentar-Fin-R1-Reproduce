@@ -37,6 +37,8 @@ if _ENABLED:
     @event.listens_for(engine.sync_engine, "connect")
     def _enable_sqlite_fk(dbapi_con, _record) -> None:  # noqa: ANN001
         dbapi_con.execute("PRAGMA foreign_keys=ON")
+        # 统一主库后 07 以 aiosqlite 连同一文件；两边均开 WAL，避免互相 database is locked。
+        dbapi_con.execute("PRAGMA journal_mode=WAL")
 
     async_session_maker = async_sessionmaker(
         bind=engine, class_=AsyncSession, expire_on_commit=False

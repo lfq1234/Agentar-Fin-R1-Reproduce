@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import config
 from app.db.models import init_db
+from app.history import init_history_db, install_history_tracing
 from app.model.exceptions import ModelInvokeError
 from app.routes import chat as chat_routes
 
@@ -17,6 +18,9 @@ from app.routes import chat as chat_routes
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # 07-会话历史记录：幂等建表 + 无侵入包裹 chat_service.chat
+    await init_history_db()
+    install_history_tracing()
     yield
 
 

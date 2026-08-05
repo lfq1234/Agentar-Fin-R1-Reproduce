@@ -44,6 +44,24 @@ db:
   sqlite_path: ./agentar.db
   echo: false
 
+# —— 07-会话历史记录（Session History & Trace） ——
+# 复用 03 主库（db.sqlite_path 指定的 agentar.db），不另开文件；
+# 作为 service 层（落库/查询/检索/导出）+ view 层（跨表聚合），旁路异步写入，失败不阻塞主链路。
+history:
+  enabled: true                 # 总开关；false 时返回 NoopHistoryStore（主链路不阻塞）
+  # db_path: 可选覆盖主库路径；不配则复用 03 的 db.sqlite_path（agentar.db）
+  record_traces: true           # 是否记录细粒度 trace_events（关则仅记 session_traces 头）
+  async_write: true             # 旁路异步写入（不阻塞 run() 返回）
+  fail_mode: silent             # silent（失败静默+告警日志）| local（落本地兜底 JSONL 文件）
+  retention_days: 180           # 留存期；purge_before 清理更早轨迹（0=永久）
+  purge_cascade: false          # delete_session/purge_before 是否联动清 03 主消息（谨慎）
+  pii_redact: true              # 落库前脱敏（手机号/身份证/银行卡/邮箱掩码）
+  semantic_search: false        # 可选语义检索（开启依赖 06 get_embedder() + 维度一致）
+  allow_admin_all: false        # 管理员跨用户审计开关
+  admin_user_ids: []            # 管理员身份来源（评审 B3）：03 User 表无 role 字段，
+                                #   故以 user_id 白名单判定管理员，避免改动 03 schema
+  build_on_startup: true        # 启动时幂等建表（评审 B6：与 03 init_db 同模式，不依赖迁移脚本）
+
 # —— 03-传统后端基础层：服务配置 ——
 server:
   host: 0.0.0.0
