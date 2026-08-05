@@ -15,7 +15,7 @@ training/
 │   └── train_sft.sh              # Stage 1 壳：设路径环境变量后调用 train_sft.py
 ├── grpo/
 │   ├── train_grpo.sh             # Stage 2：GRPO（vLLM rollout + LoRA r=32）
-│   └── fin_judge_reward.py       # 混合奖励：compute_score（RLVR 闸门 + 答案比对 → LLM 裁判）
+│   └── fin_judge_reward.py       # 奖励：compute_score（格式闸门 → RLAIF 按 rubric 加权打分 0~1）
 ├── merge_lora.py                 # 合并 SFT LoRA → 完整 checkpoint
 └── data/
     └── prepare_verl_data.py      # golden.jsonl / DeepFinance-100K → verl parquet
@@ -66,7 +66,7 @@ NPROC=1 SFT_MERGED=./outputs/sft_merged \
 | group size K | `num_generations=8` | `rollout.n=8` |
 | KL 系数 | `beta=0.04` | `actor.kl_loss_coef=0.04` |
 | reward | `external_plugins` + `reward_funcs` | `custom_reward_function`（path + name=compute_score） |
-| judge 并发 | `ThreadPoolExecutor`（同文件） | verl 逐样本调用 `compute_score`；开放题串行打裁判（原型足够，先跑通） |
+| judge 并发 | `ThreadPoolExecutor`（同文件） | verl 逐样本调用 `compute_score`；RLAIF rubric 打分逐样本串行（原型足够，先跑通） |
 
 ## reward 实现要点（fin_judge_reward.py）
 
@@ -75,14 +75,22 @@ extra_info)`，由 verl 逐样本调用（见 `train_grpo.sh` 的 `custom_reward
 接线）。**没有 RewardManager 子类、没有 ThreadPool、没有单例客户端**——逻辑是单条
 自上而下的 `if/return`，避免奖励里的回调嵌套。
 
-三步式混合奖励（对齐论文「verifiable rewards + intricate reward structures」）：
+**RLAIF + rubric 奖励**（对齐论文「intricate reward structures / verifiable rewards」，
+把奖励信号从规则比对改为 **RLAIF：由外部金融裁判模型按固定 rubric 打分**）：
 
 1. **格式闸门**：响应必须含 `<think>…</think>` 与（`\boxed{}` 或 `<answer>…</answer>`）。
    缺任一标签 → 直接 0 分（论文强调「verifiable / auditable」输出）。
-2. **可验证题（verifiable=True）→ 规则比对（RLVR）**：数值近似（容差 1e-3）或归一化
-   字符串相等，正确 1.0 / 错误 0.0。确定性硬信号，GRPO 收得最稳。
-3. **开放题（verifiable=False）→ LLM 裁判（RLGHAI）**：规则判不了对错，交给外部
-   72B 裁判按 正确性+推理严谨性+格式 打 0~1 质量分；异常 → 0（不污染训练）。
+2. **RLAIF rubric 打分**：对格式合格的样本，外部 72B 裁判按 4 维量规各打 0~10 分，
+   代码按权重聚合为 0~1 的 reward：
+   - `correctness` 正确性 0.35 — 结论与参考答案一致、事实/计算准确
+   - `reasoning` 推理严谨性 0.30 — 推理链完整、逻辑自洽、无原则性错误
+   - `compliance_risk` 合规风险意识 0.20 — 提示风险/合规约束、避免误导
+   - `clarity_format` 表达与结构 0.15 — 清晰结构化、符合格式约定
+   参考标准答案（与可选原题）一并喂给裁判，供 `correctness` 维度比对。
+   裁判输出优先解析 JSON `{"dimensions":{...}}`，退化时正则抓 `key: num`；任何异常 → 0（不污染训练）。
+
+> `verifiable` 字段不再决定走规则还是裁判，仅作元信息；RLAIF 对所有格式合格样本统一打分，
+> 比单一 0/1 规则更平滑、可解释。
 
 `train_grpo.sh` 接线：
 ```
@@ -105,6 +113,7 @@ custom_reward_function.name=compute_score
    路径，跳过 merge。
 3. **显存**：8B + LoRA + K=8 + seq 4096 在 24G 卡上偏紧。`rollout.gpu_memory_utilization=0.5`
    可下调；多卡把 `rollout.tensor_model_parallel_size` / `NPROC` 调大。
-4. **裁判服务**：`fin_judge_reward.py` 顶部常量 `JUDGE_BASE_URL / JUDGE_MODEL`
-   （或用环境变量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY` 覆盖）需与
-   实际部署一致；开放题才走裁判，可验证题不打裁判。
+4. **裁判服务**：`fin_judge_reward.py` 顶部常量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_TIMEOUT`
+   （或用环境变量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY / JUDGE_TIMEOUT` 覆盖）需与
+   实际部署一致；所有格式合格的样本都会走裁判（RLAIF 统一打分）。
+   `extra_info` 中若含 `question`/`prompt` 字段会作为原题上下文一并喂给裁判。

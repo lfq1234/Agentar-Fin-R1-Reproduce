@@ -1,22 +1,24 @@
-"""Agentar-Fin-R1 GRPO 奖励函数 —— 简洁版（verl 0.8.0 自定义奖励）。
+"""Agentar-Fin-R1 GRPO 奖励函数 —— RLAIF + rubric 极简版（verl 0.8.0 自定义奖励）。
 
-对齐论文的两阶段混合奖励（verl 官方称 RLVR「规则可验证奖励」+ LLM 裁判打分）：
+奖励信号来自 **RLAIF（Reinforcement Learning from AI Feedback）**：由外部金融裁判模型
+按固定 **rubric（评分量规）** 对回答打分，作为 reward。比单一 0/1 规则更平滑、可解释，
+也比纯偏好对更省标注。
 
-  Step 1 · 格式闸门（format gate）
+  Step 1 · 格式闸门（format gate，确定性，免费）
     响应必须含 <think>…</think> 与（\\boxed{} 或 <answer>…</answer>）。
     缺任一标签 → 直接 0 分（论文强调「verifiable / auditable」输出）。
 
-  Step 2 · 可验证题 → 规则比对（RLVR）
-    verifiable=True（数值/日期/选项/是非/百分比）：抽预测答案归一化比对，
-    正确 1.0，错误 0.0。这是确定性硬信号，GRPO 收得最稳。
-
-  Step 3 · 开放题 → LLM 裁判打分（RLGHAI）
-    verifiable=False（分析/论述类）：规则判不了对错，
-    交给外部 72B 裁判按 正确性+推理严谨性+格式 打 0~1 质量分。
+  Step 2 · RLAIF rubric 打分（对所有格式合格样本统一走裁判）
+    裁判按 4 个维度各打 0~10 分，代码按权重聚合为 0~1 reward：
+        correctness      正确性       0.35  结论与参考答案一致、事实/计算准确
+        reasoning        推理严谨性    0.30  推理链完整、逻辑自洽、无原则性错误
+        compliance_risk  合规风险意识  0.20  提示风险/合规约束、避免误导
+        clarity_format   表达与结构    0.15  清晰结构化、符合格式约定
+    参考标准答案与（可选）原题一并喂给裁判，correctness 维度据此比对。
 
 只暴露一个函数 compute_score(data_source, solution_str, ground_truth, extra_info)，
-由 verl 逐样本调用。没有 RewardManager 子类、没有 ThreadPool、没有单例客户端——
-逻辑是单条自上而下的 if/return，避免在奖励里堆回调。
+由 verl 逐样本调用。无 RewardManager 子类、无 ThreadPool、无单例客户端——
+逻辑是单条自上而下的 if/return，避免回调地狱。
 
 接线（见 train_grpo.sh）：
     actor_rollout_ref.rollout.reward_model.enable=False
@@ -24,7 +26,8 @@
     custom_reward_function.name=compute_score
 
 ground_truth 为 JSON 字符串：{"answer": "<标准答案>", "verifiable": true|false}
-（由 training/data/prepare_verl_data.py 自动标注 verifiable）。
+（verifiable 不再决定走规则还是裁判，仅作元信息；RLAIF 对所有样本统一打分）
+extra_info 可选含 "question"/"prompt" 字段，作为原题上下文喂给裁判。
 """
 
 import json
@@ -37,10 +40,20 @@ import requests
 JUDGE_BASE_URL = os.environ.get("JUDGE_BASE_URL", "http://localhost:8000/v1")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "Qwen/Qwen2.5-72B-Instruct")
 JUDGE_API_KEY = os.environ.get("JUDGE_API_KEY", "EMPTY")
+JUDGE_TIMEOUT = int(os.environ.get("JUDGE_TIMEOUT", "60"))
+
+# —— rubric：维度名（用于解析 JSON）+ 权重（和=1.0）——
+RUBRIC = [
+    ("correctness", 0.35),
+    ("reasoning", 0.30),
+    ("compliance_risk", 0.20),
+    ("clarity_format", 0.15),
+]
+RUBRIC_KEYS = [k for k, _ in RUBRIC]
 
 
 # ============================================================================
-# 工具：解析 / 归一化 / 抽取 / 比对
+# 工具：解析 / 抽取 / 格式闸门
 # ============================================================================
 def _parse_gt(raw) -> dict:
     """ground_truth 可能是 JSON 字符串或纯文本，统一成 {answer, verifiable}。"""
@@ -55,45 +68,6 @@ def _parse_gt(raw) -> dict:
     return {"answer": str(raw), "verifiable": False}
 
 
-def _normalize(s: str) -> str:
-    """金融答案归一化：去单位/符号/空白，便于比对。"""
-    s = (s or "").lower().strip()
-    for ch in ["¥", "$", "元", "人民币", "，", ",", "%", "约", "approximately",
-               "approx", "≈", " "]:
-        s = s.replace(ch, "")
-    return re.sub(r"\s+", "", s)
-
-
-def _to_num(s: str):
-    try:
-        return float(_normalize(s))
-    except Exception:
-        return None
-
-
-def _extract_pred_answer(response: str) -> str:
-    """抽取模型回答里的预测答案：优先 \\boxed{}，其次 <answer>。"""
-    m = re.search(r"\\boxed\{([^{}]*)\}", response)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return response.strip()
-
-
-def _verify_answer(pred: str, gold: str) -> bool:
-    """RLVR 核心：预测 vs 标准答案。数值近似（容差 1e-3）或归一化字符串相等。"""
-    if not pred or not gold:
-        return False
-    pn, gn = _to_num(pred), _to_num(gold)
-    if pn is not None and gn is not None:
-        if gn == 0:
-            return abs(pn) < 1e-6
-        return abs(pn - gn) / abs(gn) < 1e-3
-    return _normalize(pred) == _normalize(gold)
-
-
 def _has_valid_format(response: str) -> bool:
     """格式闸门：<think> 与（\\boxed{} 或 <answer>）同时存在。"""
     has_think = "<think>" in response and "</think>" in response
@@ -103,16 +77,43 @@ def _has_valid_format(response: str) -> bool:
     return has_think and has_answer
 
 
+def _extract_question(extra_info) -> str:
+    """优先从 extra_info 取原题上下文（key 兼容 question / prompt）。"""
+    if isinstance(extra_info, dict):
+        return extra_info.get("question") or extra_info.get("prompt") or ""
+    return ""
+
+
 # ============================================================================
-# 阶段3 RLGHAI：LLM 裁判质量打分（逐样本，单条最简洁）
+# 阶段2 RLAIF：裁判按 rubric 打分 → 加权聚合为 0~1
 # ============================================================================
-def _judge_quality(response: str, gold_answer: str) -> float:
-    """外部 72B 裁判综合打 0~1 质量分；任何异常 → 0（不污染训练）。"""
+_RUBRIC_DESC = "\n".join(
+    f"- {k}: {desc}（权重 {w:.2f}）"
+    for (k, w), desc in zip(
+        RUBRIC,
+        [
+            "结论是否与参考答案一致、事实与计算是否准确",
+            "推理链是否完整、逻辑自洽、无原则性错误",
+            "是否体现风险/合规意识、避免误导性陈述",
+            "是否清晰结构化、符合 <think>/<answer> 或 \\boxed{} 约定",
+        ],
+    )
+)
+
+
+def _rlaif_rubric_score(question: str, response: str, gold_answer: str) -> float:
+    """外部金融裁判按 rubric 给各维度 0~10 分，代码加权聚合成 0~1。
+
+    任何异常（无服务/解析失败）→ 0.0，不污染训练。
+    """
+    q_part = f"[Question]\n{question}\n" if question else ""
     prompt = (
-        "你是金融推理质量评分裁判。对给定 (模型回答, 参考标准答案)，"
-        "从①结论正确性 ②推理严谨性 ③<think>/<answer>格式合规性 三方面综合打分，"
-        "只返回一个 0~1 之间的小数（1 最优，0 最差），不要任何额外解释。\n"
-        f"参考标准答案：{gold_answer}\n模型回答：{response}"
+        f"{q_part}"
+        f"[Reference answer / gold]\n{gold_answer}\n\n"
+        f"[Assistant answer to evaluate]\n{response}\n\n"
+        f"Rubric (score each dimension 0-10, higher is better):\n{_RUBRIC_DESC}\n\n"
+        f'Return ONLY JSON: {{"dimensions": {{"correctness": x, "reasoning": x, '
+        f'"compliance_risk": x, "clarity_format": x}}, "rationale": "..."}}'
     )
     try:
         resp = requests.post(
@@ -123,32 +124,59 @@ def _judge_quality(response: str, gold_answer: str) -> float:
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
             },
-            timeout=60,
+            timeout=JUDGE_TIMEOUT,
         )
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        m = re.search(r"(\d+(?:\.\d+)?)", content)
-        if not m:
+        content = resp.json()["choices"][0]["message"]["content"]
+        scores = _parse_rubric_scores(content)
+        if not scores:
             return 0.0
-        return max(0.0, min(1.0, float(m.group(1))))
+        total = 0.0
+        for key, weight in RUBRIC:
+            if key in scores:
+                total += weight * max(0.0, min(10.0, scores[key])) / 10.0
+        return max(0.0, min(1.0, total))
     except Exception:
         return 0.0
 
 
+def _parse_rubric_scores(content: str) -> dict:
+    """尽力从裁判输出中解析出 4 个维度分数（0~10）。"""
+    # 1) 优先解析 JSON
+    try:
+        d = json.loads(content)
+        dims = d.get("dimensions", d) if isinstance(d, dict) else None
+        if isinstance(dims, dict):
+            out = {}
+            for k in RUBRIC_KEYS:
+                if k in dims:
+                    try:
+                        out[k] = float(dims[k])
+                    except Exception:
+                        pass
+            if out:
+                return out
+    except Exception:
+        pass
+    # 2) 退化解析：正则抓 key（可带或不带引号）后跟 : 或 = 再跟数字
+    out = {}
+    for key in RUBRIC_KEYS:
+        m = re.search(rf'(?:"{key}"|{key})\s*[:=]\s*(\d+(?:\.\d+)?)', content)
+        if m:
+            out[key] = float(m.group(1))
+    return out
+
+
 # ============================================================================
-# 主入口：三步式混合奖励（verl 逐样本调用）
+# 主入口：格式闸门 → RLAIF rubric 打分（verl 逐样本调用）
 # ============================================================================
 def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> float:
-    """Agentar-Fin-R1 混合奖励：格式闸门 → RLVR 规则 → RLGHAI 裁判。"""
+    """Agentar-Fin-R1 奖励：格式闸门 → RLAIF rubric 加权打分。"""
     gt = _parse_gt(ground_truth)
 
     # Step 1 · 格式不合格 → 0 分
     if not _has_valid_format(solution_str):
         return 0.0
 
-    # Step 2 · 可验证题 → 规则比对（确定性 0/1）
-    if gt.get("verifiable", False):
-        pred = _extract_pred_answer(solution_str)
-        return 1.0 if _verify_answer(pred, gt.get("answer", "")) else 0.0
-
-    # Step 3 · 开放题 → LLM 裁判质量分
-    return _judge_quality(solution_str, gt.get("answer", ""))
+    # Step 2 · RLAIF：裁判按 rubric 对格式合格的回答打分（0~1）
+    question = _extract_question(extra_info)
+    return _rlaif_rubric_score(question, solution_str, gt.get("answer", ""))
