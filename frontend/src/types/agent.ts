@@ -57,3 +57,38 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
 }
+
+// ===== 03 · 个人文档与知识图谱（前端契约，镜像 backend/03 接口） =====
+
+export type DocStatus = "pending" | "parsing" | "done" | "error";
+
+export interface PersonalDocument {
+  id: string;
+  filename: string;
+  size: number; // bytes
+  status: DocStatus;
+  error?: string;
+  uploadedAt: string; // ISO 8601
+  summary?: string; // 可选：用于「基于此文档提问」联动（后端可返回）
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: string;
+  sourceDocId: string;
+  properties?: Record<string, string | number>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string; // node id
+  target: string; // node id
+  label: string;
+  sourceDocId: string;
+}
+
+export interface PersonalKnowledgeGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}

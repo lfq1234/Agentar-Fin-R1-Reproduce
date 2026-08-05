@@ -756,3 +756,407 @@ body {
 .message-list {
   padding-bottom: 100px;
 }
+
+/* ===== 03 · 个人文档与知识图谱 ===== */
+
+/* 双标签切换 */
+.pd-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pd-tab {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.pd-tab:hover {
+  color: var(--text);
+}
+.pd-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+.pd-error {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pd-loading {
+  padding: 16px 0;
+}
+
+/* 文档视图 */
+.pd-docs-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.doc-uploader {
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--bg);
+  transition: border-color 0.15s, background 0.15s;
+}
+.doc-uploader:hover,
+.doc-uploader.dragover {
+  border-color: var(--primary);
+  background: var(--active-bg);
+}
+.doc-uploader-icon {
+  font-size: 24px;
+  color: var(--primary);
+}
+.doc-uploader-text {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+.doc-uploader-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.doc-empty {
+  text-align: center;
+  padding: 24px 0;
+}
+.doc-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.doc-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.doc-item-name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.doc-status-pending {
+  background: #e5e7eb;
+  color: var(--muted);
+}
+.doc-status-parsing {
+  background: #fef3c7;
+  color: var(--warn);
+}
+.doc-status-done {
+  background: #dcfce7;
+  color: var(--ok);
+}
+.doc-status-error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.doc-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: doc-spin 0.8s linear infinite;
+}
+@keyframes doc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.doc-item-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.doc-item-error {
+  font-size: 12px;
+  color: #b91c1c;
+}
+.doc-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.doc-item-btn {
+  font-size: 13px;
+  padding: 5px 10px;
+}
+
+/* 图谱视图 */
+.pd-graph-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 180px);
+  min-height: 460px;
+}
+.graph-viewer {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.graph-viewer.graph-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+}
+.graph-canvas {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+}
+.graph-canvas:active {
+  cursor: grabbing;
+}
+.graph-svg {
+  display: block;
+}
+.graph-node-label {
+  font-size: 12px;
+  fill: var(--text);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+  user-select: none;
+}
+.graph-node.dim,
+.graph-edge.dim {
+  opacity: 0.18;
+}
+.graph-node.selected circle {
+  stroke: var(--primary);
+  stroke-width: 3px;
+}
+.graph-edge-label {
+  font-size: 11px;
+  fill: var(--muted);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: auto;
+  user-select: none;
+}
+.graph-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(17, 24, 39, 0.9);
+  color: #fff;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  z-index: 10;
+}
+.graph-toomany {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fef3c7;
+  color: var(--warn);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  z-index: 11;
+  white-space: nowrap;
+}
+
+/* 图谱浮动控件 */
+.graph-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  max-width: 60%;
+}
+.graph-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px 4px;
+}
+.graph-ctrl-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.graph-ctrl-btn:hover {
+  background: var(--hover-bg);
+}
+.graph-zoom-val {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 40px;
+  text-align: center;
+}
+.graph-filter {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+}
+.graph-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.graph-filter-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.graph-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.graph-doc-select {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  max-width: 100%;
+}
+
+/* 实体详情侧板 */
+.entity-detail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  max-width: 80%;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 13;
+}
+.entity-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.entity-detail-head h3 {
+  margin: 0;
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entity-detail-close {
+  padding: 4px 8px;
+}
+.entity-detail-body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  font-size: 13px;
+  overflow-y: auto;
+}
+.entity-detail-body dt {
+  color: var(--muted);
+}
+.entity-detail-body dd {
+  margin: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+.entity-detail-inject {
+  margin-top: auto;
+}
+
+@media (max-width: 820px) {
+  .pd-graph-view {
+    height: calc(100vh - 200px);
+  }
+  .entity-detail {
+    width: 100%;
+    max-width: 100%;
+  }
+  .graph-controls {
+    max-width: 80%;
+  }
+}
+

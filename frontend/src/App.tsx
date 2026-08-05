@@ -1,4 +1,6 @@
+import { useCallback } from "react";
 import { useChat } from "./hooks/useChat";
+import type { PersonalDocument } from "./types/agent";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { MessageList } from "./components/MessageList";
@@ -84,6 +86,27 @@ export function App() {
 
   const isEmpty = history.length === 0;
 
+  // 03 联动：把实体/文档摘要追加到当前会话输入框（关闭面板后可见），技术文档 §8。
+  const handleInjectContext = useCallback(
+    (text: string) => {
+      setMessage((prev) => (prev ? prev + "\n" + text : text));
+      togglePersonalDocs();
+    },
+    [setMessage, togglePersonalDocs],
+  );
+
+  // 03 联动：新建会话并以文档摘要作为首条上下文（需求 FR7）。
+  const handleAskWithDocument = useCallback(
+    (doc: PersonalDocument) => {
+      createSession();
+      const summary = doc.summary
+        ? `关于文档《${doc.filename}》：${doc.summary}`
+        : `关于文档《${doc.filename}》，请基于其内容回答：`;
+      setMessage(summary);
+    },
+    [createSession, setMessage],
+  );
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -101,7 +124,11 @@ export function App() {
 
       <div className="app-main">
         {personalDocsOpen ? (
-          <PersonalDocsPanel onClose={() => togglePersonalDocs()} />
+          <PersonalDocsPanel
+            onClose={() => togglePersonalDocs()}
+            onInjectContext={handleInjectContext}
+            onAskWithDocument={handleAskWithDocument}
+          />
         ) : isEmpty ? (
           <div className="hero-page">
             <button className="hero-hamburger" onClick={toggleSidebar} aria-label="切换侧边栏">
