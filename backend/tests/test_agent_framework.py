@@ -17,6 +17,7 @@ import json
 import pytest
 
 from app.agent.agents import SCENES, build_agents
+from app.agent.board import MAX_CONSULT_ROUNDS
 from app.agent.system import AgentResult, get_system, run
 from app.model import ModelInterface
 from app.model.exceptions import ModelInvokeError
@@ -168,3 +169,37 @@ async def test_model_invoke_error_propagates(monkeypatch):
     monkeypatch.setattr(system_mod, "get_model", lambda: ErrorModel())
     with pytest.raises(ModelInvokeError):
         await run("用户问：任意", scene="Banking")
+
+
+@pytest.mark.asyncio
+async def test_run_emits_agent_trace_single_expert(fake_model):
+    """档A 单专家：agent_trace 含一条 expert_opinion（主答）与 revise 步骤。"""
+    res = await run("用户问：基金怎么买", scene="Insurance")
+    assert res.agent_trace, "应采集到多智能体步骤"
+    kinds = {s["type"] for s in res.agent_trace}
+    assert "expert_opinion" in kinds
+    assert "revise" in kinds
+    experts = [s for s in res.agent_trace if s["type"] == "expert_opinion"]
+    assert len(experts) == 1 and experts[0]["agent"] == "Insurance"
+
+
+@pytest.mark.asyncio
+async def test_run_emits_agent_trace_roundtable(fake_model):
+    """档B 圆桌会商：参与专家各一条 expert_opinion（受 MAX_CONSULT_ROUNDS 上限约束）+ 一条 synthesize。"""
+    res = await run("用户问：跨领域综合问题", scene="Multi")
+    experts = [s for s in res.agent_trace if s["type"] == "expert_opinion"]
+    assert len(experts) == MAX_CONSULT_ROUNDS  # 圆桌会商参与专家数上限为 3
+    assert any(s["type"] == "synthesize" for s in res.agent_trace)
+
+
+@pytest.mark.asyncio
+async def test_run_emits_agent_trace_with_consult_peer(fake_model, monkeypatch):
+    """档A 跨域互询：主专家 + 被咨询同级各一条 expert_opinion（仅自动路由时触发）。"""
+    import app.agent.system as system_mod
+
+    # 不传 scene → 走自动路由；强制路由到 MutualFunds，并让互询判出 Insurance。
+    monkeypatch.setattr(system_mod, "_parse_scene", lambda text: "MutualFunds")
+    monkeypatch.setattr(system_mod, "_detect_peer", lambda scene, message: "Insurance")
+    res = await run("用户问：基金和保险怎么配置")
+    agents = {s["agent"] for s in res.agent_trace if s["type"] == "expert_opinion"}
+    assert "MutualFunds" in agents and "Insurance" in agents

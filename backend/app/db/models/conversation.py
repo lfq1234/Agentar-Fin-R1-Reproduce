@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlmodel import Field, ForeignKey, SQLModel
 
@@ -58,3 +58,6 @@ class ChatResponse(ConversationBase):
     reply: str
     compliance_notes: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
+    # 07 落库用：多智能体细粒度步骤（route/rag/expert_opinion/synthesize/revise），
+    # 经 hooks 转成 trace_events 落到同一 conversation_id 的轨迹。
+    agent_trace: List[Dict[str, Any]] = Field(default_factory=list)

@@ -54,6 +54,10 @@ class AgentResult:
     slots: dict[str, str] = field(default_factory=dict)
     tool_plan: list[str] = field(default_factory=list)
     expression: str = ""                      # 给前端的表达 / 话术
+    # 07 落库用：多智能体细粒度步骤（路由/RAG/专家意见/合成/回写）的结构化记录，
+    # 每个元素 {agent, type, content, meta}；由 07 的 build_events(extra_events=...) 落库
+    # 到同一 conversation_id 的轨迹（评审 B1 / v2 完整回放）。
+    agent_trace: list[dict] = field(default_factory=list)
 
 
 class _AgentSystem:
@@ -173,6 +177,8 @@ async def run(
         sys = get_system()
         board = ExpertBoard(sys.agents)
         scene_explicit = scene is not None
+        # 07 落库：多智能体细粒度步骤（评审 B1 / v2 完整回放）。
+        trace: list[dict] = []
 
         # 1) 路由：未给定 scene 时由 Coordinator 判定；多领域问题返回 "Multi"。
         if scene is None:
@@ -185,6 +191,10 @@ async def run(
             )
             scene_text = await _call_agent(sys.agents["coordinator"], route_msg)
             scene = _parse_scene(scene_text) or "Banking"
+            trace.append(
+                {"agent": "Coordinator", "type": "route",
+                 "content": f"场景判定：{scene}", "meta": {"scene": scene, "scene_explicit": scene_explicit}}
+            )
 
         # 2) RAG 检索（经 RAG ReActAgent 的 retrieve 工具 → 06 知识库 + 08 个人文档）
         #    检索作用域用 contextvars 下传，工具签名保持只有 query（防 LLM 编造 user_id）。
@@ -195,6 +205,9 @@ async def run(
         )
         with scoped(user_id=user_id, use_personal_docs=use_personal_docs):
             context = await _call_agent(sys.agents["rag"], rag_msg)
+            trace.append(
+                {"agent": "rag", "type": "rag", "content": context, "meta": {"scene": scene}}
+            )
 
             # 3) 领域专家作答：档B 圆桌会商 / 档A 单专家 + 同级互询
             if scene == "Multi" or scene not in SCENES:
@@ -205,6 +218,10 @@ async def run(
                     role="user",
                 )
                 opinions = await board.roundtable(SCENES, base)
+                for name, text in opinions:
+                    trace.append(
+                        {"agent": name, "type": "expert_opinion", "content": text, "meta": {"scene": scene}}
+                    )
                 synth_prompt = (
                     f"用户问题：{message}\n\n参考上下文：\n{context}\n\n"
                     "以下为各位领域专家的独立意见，请综合为一份统一、不矛盾的答复：\n"
@@ -213,6 +230,9 @@ async def run(
                 draft = await _call_agent(
                     sys.agents["coordinator"],
                     Msg(name="user", content=synth_prompt, role="user"),
+                )
+                trace.append(
+                    {"agent": "Coordinator", "type": "synthesize", "content": draft, "meta": {"scene": scene}}
                 )
                 revise_role = sys.agents["coordinator"]
             else:
@@ -227,6 +247,10 @@ async def run(
                         role="user",
                     )
                     peer_opinion = await board.consult(peer, peer_msg)
+                    trace.append(
+                        {"agent": peer, "type": "expert_opinion", "content": peer_opinion,
+                         "meta": {"scene": scene, "consulted_by": scene}}
+                    )
                     expert_prompt = (
                         f"参考上下文：\n{context}\n\n"
                         f"同级专家（{peer}）的补充意见：\n{peer_opinion}\n\n"
@@ -236,6 +260,9 @@ async def run(
                     expert_prompt = f"参考上下文：\n{context}\n\n用户问题：{message}"
                 draft = await _call_agent(
                     expert, Msg(name="user", content=expert_prompt, role="user")
+                )
+                trace.append(
+                    {"agent": scene, "type": "expert_opinion", "content": draft, "meta": {"scene": scene}}
                 )
                 revise_role = expert
 
@@ -267,6 +294,9 @@ async def run(
             draft = await _call_agent(
                 revise_role, Msg(name="user", content=revise_prompt, role="user")
             )
+            trace.append(
+                {"agent": revise_role.name, "type": "revise", "content": draft, "meta": {"scene": scene}}
+            )
 
         # 7) 结构化分析（可选，由 Coordinator 抽取）
         intent = None
@@ -294,6 +324,7 @@ async def run(
             slots=slots,
             tool_plan=tool_plan if isinstance(tool_plan, list) else [],
             expression=expression,
+            agent_trace=trace,
         )
     except ModelInvokeError as exc:
         # 评审 N2：转化为框架级错误并上抛，不得静默吞掉。

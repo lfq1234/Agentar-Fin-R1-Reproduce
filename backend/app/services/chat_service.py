@@ -72,4 +72,5 @@ async def chat(req: ChatRequest, db: Optional[AsyncSession], user_id: Optional[i
         conversation_id=conversation_id,
         compliance_notes=compliance_notes,
         risk_flags=risk_flags,
+        agent_trace=result.agent_trace,
     )

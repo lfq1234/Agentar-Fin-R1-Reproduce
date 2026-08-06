@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from typing import Any
 
 from app.db.history.collect import build_events
+from app.db.history.models import TraceEvent
 from app.db.history.store import get_history_store
 
 
@@ -61,8 +63,21 @@ def install_history_tracing() -> Any:
                 reply=resp.reply,
                 compliance_notes=resp.compliance_notes,
                 risk_flags=resp.risk_flags,
+                agent_trace=getattr(resp, "agent_trace", None),
             )
-            events = build_events(result, user_message=req.message)
+            # 02 扩展（评审 B1 / v2）：把多智能体细粒度步骤转为 trace_events 落库，
+            # 专家对话（route/rag/expert_opinion/synthesize/revise）一并存入本次会话轨迹。
+            # 用 getattr 容忍未携带该字段的响应（如测试桩 / 旧调用方），缺失时退化为 v1 记录。
+            extra_events = [
+                TraceEvent(
+                    agent=step.get("agent", ""),
+                    type=step.get("type", ""),
+                    summary_out=step.get("content", ""),
+                    meta_json=json.dumps(step.get("meta") or {}, ensure_ascii=False),
+                )
+                for step in (getattr(resp, "agent_trace", None) or [])
+            ]
+            events = build_events(result, user_message=req.message, extra_events=extra_events)
             coro = store.record_run(
                 conversation_id=str(resp.conversation_id),
                 user_id=user_id,

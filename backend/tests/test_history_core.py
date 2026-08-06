@@ -114,6 +114,25 @@ def test_collect_v1_and_v2():
     assert any(e.type == "rag_hit" for e in evs_v2)
 
 
+def test_collect_extra_events_from_agent_trace():
+    """02 产出的 agent_trace（dict 列表）经 hooks 转 TraceEvent 后能被 build_events 收录。"""
+    res = FakeResult(reply="hi", compliance_notes=["c1"], risk_flags=["r1"])
+    agent_trace = [
+        {"agent": "Banking", "type": "expert_opinion", "content": "这是Banking领域答案",
+         "meta": {"scene": "Banking"}},
+        {"agent": "Coordinator", "type": "synthesize", "content": "合成统一答案", "meta": {}},
+    ]
+    extra = [
+        M.TraceEvent(agent=s["agent"], type=s["type"], summary_out=s["content"],
+                     meta_json=json.dumps(s.get("meta") or {}, ensure_ascii=False))
+        for s in agent_trace
+    ]
+    evs = collect.build_events(res, user_message="u", extra_events=extra)
+    types = {e.type for e in evs}
+    assert "expert_opinion" in types
+    assert "synthesize" in types
+
+
 # ---------------------------------------------------------------------------
 # 写入 / 回放
 # ---------------------------------------------------------------------------
@@ -127,6 +146,22 @@ async def test_record_and_get_session(store):
     assert detail.meta.msg_count == 2
     roles = {m["role"] for m in detail.messages}
     assert roles >= {"user", "assistant"}
+
+
+@pytest.mark.asyncio
+async def test_record_expert_events_and_replay(store):
+    """专家意见（expert_opinion）落库后能随会话轨迹回放。"""
+    res = FakeResult(reply="最终答案", compliance_notes=["合规OK"], risk_flags=["风险中"])
+    extra = [M.TraceEvent(agent="Banking", type="expert_opinion", summary_out="这是Banking领域答案")]
+    events = collect.build_events(res, user_message="买基金", extra_events=extra)
+    await store.record_run(
+        conversation_id="conv-x", user_id="userA", scene="Banking",
+        run_id="run-x", turn_id="turn-x", duration_ms=50, model="m",
+        result=res, events=events, user_message="买基金", total_tokens=5,
+    )
+    detail = await store.get_session("userA", "conv-x")
+    flat = [n for run in detail.trace for n, _ in exportmod._iter_event_nodes(run["events"])]
+    assert any(n.get("type") == "expert_opinion" for n in flat)
 
 
 @pytest.mark.asyncio
