@@ -19,6 +19,7 @@ import agentscope
 from agentscope.message import Msg
 
 from app.agent.agents import SCENES, build_agents
+from app.agent.board import ExpertBoard
 from app.agent.model_bridge import AgentarModel, extract_content
 from app.agent.rag_scope import scoped
 from app.model import get_model
@@ -91,10 +92,44 @@ async def _call_agent(agent, msg: Msg) -> str:
 
 
 def _parse_scene(text: str) -> Optional[str]:
+    if not text:
+        return None
+    # 多领域问题：协调者输出 "Multi" → 走圆桌会商（档B）。
+    if text.strip().lower() == "multi":
+        return "Multi"
     for scene in SCENES:
         if scene.lower() in text.lower():
             return scene
     return None
+
+
+# 各领域的跨域关键词提示（用于档A 专家互询的触发判定）。
+_DOMAIN_HINTS: dict[str, list[str]] = {
+    "Banking": ["存款", "贷款", "银行", "理财", "活期", "定期", "储蓄"],
+    "Securities": ["股票", "证券", "A股", "港股", "打新", "ETF", "开户"],
+    "Insurance": ["保险", "保单", "理赔", "寿险", "重疾", "年金"],
+    "Trust": ["信托", "家族信托", "受托", "受益人"],
+    "MutualFunds": ["基金", "公募", "私募", "净值", "申购", "赎回"],
+}
+
+
+def _detect_peer(scene: str, message: str) -> Optional[str]:
+    """档A 专家互询：从问题中识别一个**不同于当前场景**的领域关键词，返回其场景名。
+
+    仅在自动路由（scene 由协调者判定）时启用，显式指定 scene 不做跨域改写。
+    """
+    msg = message or ""
+    for other, hints in _DOMAIN_HINTS.items():
+        if other == scene:
+            continue
+        if any(h in msg for h in hints):
+            return other
+    return None
+
+
+def _format_opinions(opinions: list[tuple[str, str]]) -> str:
+    """把圆桌会商的多专家意见格式化为可读文本。"""
+    return "\n".join(f"【{name}】{text}" for name, text in opinions)
 
 
 def _parse_structured(text: str) -> dict:
@@ -136,13 +171,16 @@ async def run(
     """
     try:
         sys = get_system()
+        board = ExpertBoard(sys.agents)
+        scene_explicit = scene is not None
 
-        # 1) 路由：未给定 scene 时由 Coordinator 判定
+        # 1) 路由：未给定 scene 时由 Coordinator 判定；多领域问题返回 "Multi"。
         if scene is None:
             route_msg = Msg(
                 name="user",
                 content=f"用户问题：{message}\n请判断场景"
-                f"（{'/'.join(SCENES)}），只回复场景名。",
+                f"（{'/'.join(SCENES)}）。若问题明显涉及多个领域，请只回复 Multi；"
+                f"否则只回复单个场景名。",
                 role="user",
             )
             scene_text = await _call_agent(sys.agents["coordinator"], route_msg)
@@ -158,33 +196,79 @@ async def run(
         with scoped(user_id=user_id, use_personal_docs=use_personal_docs):
             context = await _call_agent(sys.agents["rag"], rag_msg)
 
-            # 3) 领域专家作答（消费检索上下文；专家自身也可能再调 lookup_knowledge，
-            #    故一并置于同一作用域内）
-            expert = sys.agents[scene]
-            expert_msg = Msg(
+            # 3) 领域专家作答：档B 圆桌会商 / 档A 单专家 + 同级互询
+            if scene == "Multi" or scene not in SCENES:
+                # 档B 圆桌会商：多位专家轮流发言，再由 coordinator 合成统一答案。
+                base = Msg(
+                    name="user",
+                    content=f"参考上下文：\n{context}\n\n用户问题：{message}",
+                    role="user",
+                )
+                opinions = await board.roundtable(SCENES, base)
+                synth_prompt = (
+                    f"用户问题：{message}\n\n参考上下文：\n{context}\n\n"
+                    "以下为各位领域专家的独立意见，请综合为一份统一、不矛盾的答复：\n"
+                    + _format_opinions(opinions)
+                )
+                draft = await _call_agent(
+                    sys.agents["coordinator"],
+                    Msg(name="user", content=synth_prompt, role="user"),
+                )
+                revise_role = sys.agents["coordinator"]
+            else:
+                expert = sys.agents[scene]
+                # 档A 专家互询：仅自动路由且检测到跨域关键词时，编排层代专家咨询一个
+                # 相关同级，并将其意见并入作答上下文（专家自身仍只调一次）。
+                peer = None if scene_explicit else _detect_peer(scene, message)
+                if peer:
+                    peer_msg = Msg(
+                        name="user",
+                        content=f"参考上下文：\n{context}\n\n子问题：{message}",
+                        role="user",
+                    )
+                    peer_opinion = await board.consult(peer, peer_msg)
+                    expert_prompt = (
+                        f"参考上下文：\n{context}\n\n"
+                        f"同级专家（{peer}）的补充意见：\n{peer_opinion}\n\n"
+                        f"用户问题：{message}"
+                    )
+                else:
+                    expert_prompt = f"参考上下文：\n{context}\n\n用户问题：{message}"
+                draft = await _call_agent(
+                    expert, Msg(name="user", content=expert_prompt, role="user")
+                )
+                revise_role = expert
+
+            # 4) 审核（建议式，不阻断）
+            review_msg = Msg(
                 name="user",
-                content=f"参考上下文：\n{context}\n\n用户问题：{message}",
+                content=f"原问题：{message}\n待审答案：{draft}",
                 role="user",
             )
-            draft = await _call_agent(expert, expert_msg)
+            compliance_notes = [await _call_agent(sys.agents["review"], review_msg)]
 
-        # 4) 审核（建议式，不阻断）
-        review_msg = Msg(
-            name="user",
-            content=f"原问题：{message}\n待审答案：{draft}",
-            role="user",
-        )
-        compliance_notes = [await _call_agent(sys.agents["review"], review_msg)]
+            # 5) 风控（建议式，不阻断）
+            risk_msg = Msg(
+                name="user",
+                content=f"原问题：{message}\n待审答案：{draft}",
+                role="user",
+            )
+            risk_flags = [await _call_agent(sys.agents["risk"], risk_msg)]
 
-        # 5) 风控（建议式，不阻断）
-        risk_msg = Msg(
-            name="user",
-            content=f"原问题：{message}\n待审答案：{draft}",
-            role="user",
-        )
-        risk_flags = [await _call_agent(sys.agents["risk"], risk_msg)]
+            # 6) 回写环（FR-EX3）：把合规 / 风控结论回灌给作答角色改写一版，
+            #    最终 reply 吸收合理修正，同时保留 compliance_notes / risk_flags。
+            #    提示词刻意避开「风控 / 合规审核」等子串，避免与分支判定撞车。
+            revise_prompt = (
+                f"原问题：{message}\n\n当前答案：{draft}\n\n"
+                f"审查反馈：{compliance_notes[0]}\n风险反馈：{risk_flags[0]}\n\n"
+                "请根据以上审查反馈修订答案，吸收合理修正，保留事实与引用，"
+                "不要新增无关内容。"
+            )
+            draft = await _call_agent(
+                revise_role, Msg(name="user", content=revise_prompt, role="user")
+            )
 
-        # 6) 结构化分析（可选，由 Coordinator 抽取）
+        # 7) 结构化分析（可选，由 Coordinator 抽取）
         intent = None
         slots: dict[str, str] = {}
         tool_plan: list[str] = []
