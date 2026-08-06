@@ -4,6 +4,9 @@
 按固定 **rubric（评分量规）** 对回答打分，作为 reward。比单一 0/1 规则更平滑、可解释，
 也比纯偏好对更省标注。
 
+裁判模型：**外部 DeepSeek V4 Flash API**（OpenAI 兼容 /v1），见下方 JUDGE_* 配置。
+不再本地部署 72B 裁判，因此训练机（A800 八卡）无需为裁判预留显存，全部用于 actor。
+
   Step 1 · 格式闸门（format gate，确定性，免费）
     响应必须含 <think>…</think> 与（\\boxed{} 或 <answer>…</answer>）。
     缺任一标签 → 直接 0 分（论文强调「verifiable / auditable」输出）。
@@ -25,6 +28,10 @@
     custom_reward_function.path=<本文件>
     custom_reward_function.name=compute_score
 
+运行前需导出 API 凭证（裁判走外部 DeepSeek V4 Flash）：
+    export JUDGE_API_KEY=<你的 DeepSeek API key>
+    # 可选覆盖：export JUDGE_MODEL=deepseek-v4-flash / export JUDGE_BASE_URL=https://api.deepseek.com/v1
+
 ground_truth 为 JSON 字符串：{"answer": "<标准答案>", "verifiable": true|false}
 （verifiable 不再决定走规则还是裁判，仅作元信息；RLAIF 对所有样本统一打分）
 extra_info 可选含 "question"/"prompt" 字段，作为原题上下文喂给裁判。
@@ -36,10 +43,16 @@ import re
 
 import requests
 
-# —— 裁判模型服务（OpenAI 兼容 /v1，独立部署，不与训练抢显存）——
-JUDGE_BASE_URL = os.environ.get("JUDGE_BASE_URL", "http://localhost:8000/v1")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "Qwen/Qwen2.5-72B-Instruct")
-JUDGE_API_KEY = os.environ.get("JUDGE_API_KEY", "EMPTY")
+# —— 裁判模型服务（外部 DeepSeek V4 Flash，OpenAI 兼容 /v1）——
+# 不再本地部署 72B，改为走 DeepSeek 官方 API 或任意兼容端点。
+# 全部由环境变量注入，默认值可按实际模型名 / 端点覆盖：
+#   JUDGE_BASE_URL — 兼容 OpenAI 的 /v1 端点（默认 DeepSeek 官方）
+#   JUDGE_MODEL    — 模型名（默认 deepseek-v4-flash，请按实际 API 名称覆盖）
+#   JUDGE_API_KEY  — 必填，DeepSeek API key
+#   JUDGE_TIMEOUT  — 单次请求超时（秒）
+JUDGE_BASE_URL = os.environ.get("JUDGE_BASE_URL", "https://api.deepseek.com/v1")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "deepseek-v4-flash")
+JUDGE_API_KEY = os.environ.get("JUDGE_API_KEY", "")
 JUDGE_TIMEOUT = int(os.environ.get("JUDGE_TIMEOUT", "60"))
 
 # —— rubric：维度名（用于解析 JSON）+ 权重（和=1.0）——

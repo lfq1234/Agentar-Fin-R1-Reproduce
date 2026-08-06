@@ -3,7 +3,7 @@
 本目录是 **verl 0.8.0** 版的两阶段训练实现。原 ms-swift 版（SFT/GRPO）已删除，仅保留 verl。
 决策背景见根 `report.md` 与 `../../.workbuddy/memory/`：ms-swift 在 GRPO 阶段
 rollout 用 `transformers.generate`、reward 同步阻塞，verl 用 vLLM rollout + Ray 式
-流水线，对本项目（Qwen3-8B + K=8 + 外部 72B 裁判）是「代差级」提速。
+流水线，对本项目（Qwen3-8B + K=8 + 外部 DeepSeek V4 Flash 裁判）是「代差级」提速。
 
 ## 目录结构
 
@@ -44,9 +44,10 @@ python training/merge_lora.py \
     --adapter ./outputs/sft_lora_adapter \
     --output ./outputs/sft_merged
 
-# 3) 起裁判服务（独立进程 / 独立卡，OpenAI 兼容 /v1）
-#   vllm serve Qwen/Qwen2.5-72B-Instruct --port 8000
-#   或在另一张卡 swift deploy ...
+# 3) 配置裁判（外部 DeepSeek V4 Flash API，OpenAI 兼容 /v1）
+#    export JUDGE_API_KEY=<你的 DeepSeek API key>
+#    # 可选：export JUDGE_MODEL=deepseek-v4-flash / export JUDGE_BASE_URL=https://api.deepseek.com/v1
+#    无需本地部署 72B，训练机显存全部留给 actor（A800 八卡）。
 
 # 4) Stage 2 GRPO
 NPROC=1 SFT_MERGED=./outputs/sft_merged \
@@ -80,7 +81,7 @@ extra_info)`，由 verl 逐样本调用（见 `train_grpo.sh` 的 `custom_reward
 
 1. **格式闸门**：响应必须含 `<think>…</think>` 与（`\boxed{}` 或 `<answer>…</answer>`）。
    缺任一标签 → 直接 0 分（论文强调「verifiable / auditable」输出）。
-2. **RLAIF rubric 打分**：对格式合格的样本，外部 72B 裁判按 4 维量规各打 0~10 分，
+2. **RLAIF rubric 打分**：对格式合格的样本，外部 DeepSeek V4 Flash 裁判按 4 维量规各打 0~10 分，
    代码按权重聚合为 0~1 的 reward：
    - `correctness` 正确性 0.35 — 结论与参考答案一致、事实/计算准确
    - `reasoning` 推理严谨性 0.30 — 推理链完整、逻辑自洽、无原则性错误
@@ -105,15 +106,16 @@ custom_reward_function.name=compute_score
 
 ## 注意事项 / 已知风险
 
-1. **dtype**：verl 默认走 bf16（vLLM rollout 对 bf16 更稳）。原 ms-swift 用 fp16，
-   迁移后建议统一 bf16；若坚持 fp16 需显式配置 `actor_rollout_ref.model.*
-   / rollout` 的 dtype。
+1. **dtype**：训练脚本已统一为 **bf16**（`train_sft.py` 的 `model.torch_dtype`、
+   `train_grpo.sh` 的 `actor/ref fsdp_config.param_dtype` 与 `rollout.dtype` 均为
+   `bfloat16`）。A800（Ampere sm_80）对 bf16 原生支持，比 fp16 数值更稳、无需 loss-scale。
 2. **merge 兼容性**：`merge_lora.py` 假设 verl SFT LoRA 输出是 peft 兼容格式。
    若你的 verl 版本把 LoRA 存成非 peft 格式，改用「SFT 全参 + GRPO 自带 LoRA」
    路径，跳过 merge。
 3. **显存**：8B + LoRA + K=8 + seq 4096 在 24G 卡上偏紧。`rollout.gpu_memory_utilization=0.5`
    可下调；多卡把 `rollout.tensor_model_parallel_size` / `NPROC` 调大。
-4. **裁判服务**：`fin_judge_reward.py` 顶部常量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_TIMEOUT`
-   （或用环境变量 `JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY / JUDGE_TIMEOUT` 覆盖）需与
-   实际部署一致；所有格式合格的样本都会走裁判（RLAIF 统一打分）。
+4. **裁判服务**：`fin_judge_reward.py` 走 **外部 DeepSeek V4 Flash API**（OpenAI 兼容 /v1），
+   通过环境变量注入：`JUDGE_BASE_URL`（默认 `https://api.deepseek.com/v1`）、
+   `JUDGE_MODEL`（默认 `deepseek-v4-flash`）、`JUDGE_API_KEY`（必填）、`JUDGE_TIMEOUT`。
+   无需本地部署，所有格式合格的样本都会走裁判（RLAIF 统一打分）；串行调用，吞吐受 API RPS 限制。
    `extra_info` 中若含 `question`/`prompt` 字段会作为原题上下文一并喂给裁判。

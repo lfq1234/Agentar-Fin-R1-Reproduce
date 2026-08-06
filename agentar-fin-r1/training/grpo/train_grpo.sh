@@ -4,7 +4,7 @@
 # ----------------------------------------------------------------------------
 # 在 Stage 1 merge 后的完整模型（outputs/sft_merged）上做 GRPO 强化学习攻坚。
 # 基座 Qwen3-8B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
-# 外部 72B LLM 裁判（fin_judge reward manager，见 fin_judge_reward.py）。
+# 外部 DeepSeek V4 Flash API 裁判（fin_judge_reward.py，走 OpenAI 兼容 /v1）。
 #
 # 与旧 ms-swift 版等价映射：
 #   num_generations=8          → actor_rollout_ref.rollout.n=8        (group size K)
@@ -57,9 +57,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.actor.fsdp_config.param_dtype=float16 \
+    actor_rollout_ref.actor.fsdp_config.param_dtype=bfloat16 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.dtype=float16 \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.n=8 \
@@ -71,7 +71,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=True \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=8192 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
-    actor_rollout_ref.ref.fsdp_config.param_dtype=float16 \
+    actor_rollout_ref.ref.fsdp_config.param_dtype=bfloat16 \
     actor_rollout_ref.rollout.reward_model.enable=False \
     custom_reward_function.path=${REWARD_SCRIPT} \
     custom_reward_function.name=compute_score \
