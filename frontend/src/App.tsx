@@ -1,6 +1,7 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useChat } from "./hooks/useChat";
-import type { PersonalDocument } from "./types/agent";
+import { clearToken, getToken, me, UNAUTHORIZED_EVENT } from "./api/client";
+import type { AuthUser, PersonalDocument } from "./types/agent";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { MessageList } from "./components/MessageList";
@@ -9,6 +10,7 @@ import { AnalyzePanel } from "./components/AnalyzePanel";
 import { ErrorModal } from "./components/ErrorModal";
 import { PersonalDocsPanel } from "./components/PersonalDocsPanel";
 import { SceneSelect } from "./components/SceneSelect";
+import { LoginPage } from "./components/LoginPage";
 
 const STATUS_TEXT: Record<string, string> = {
   unknown: "连接中…",
@@ -57,6 +59,44 @@ function LeftToolbar({
 }
 
 export function App() {
+  // 09：登录门禁。启动时若有令牌则校验有效性，无效则清令牌回到登录页。
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [booting, setBooting] = useState(true);
+
+  const logout = useCallback(() => {
+    clearToken();
+    setUser(null);
+  }, []);
+
+  // 启动校验：携带本地令牌请求 /auth/me，成功则进入聊天界面，失败则回到登录页。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!getToken()) {
+        setBooting(false);
+        return;
+      }
+      try {
+        const u = await me();
+        if (!cancelled) setUser(u);
+      } catch {
+        if (!cancelled) clearToken();
+      } finally {
+        if (!cancelled) setBooting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 运行时鉴权失败（401/403）由 client 派发，统一登出。
+  useEffect(() => {
+    const onUnauthorized = () => setUser(null);
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
+
   const {
     sessions,
     currentSessionId,
@@ -107,6 +147,18 @@ export function App() {
     [createSession, setMessage],
   );
 
+  // 未登录：渲染登录页（启动校验中显示最小占位，避免闪烁）。
+  if (booting) {
+    return (
+      <div className="app-shell">
+        <div className="auth-boot">校验登录中…</div>
+      </div>
+    );
+  }
+  if (!user) {
+    return <LoginPage onLoggedIn={(u) => setUser(u)} />;
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -114,10 +166,12 @@ export function App() {
         currentSessionId={currentSessionId}
         personalDocsOpen={personalDocsOpen}
         sidebarOpen={sidebarOpen}
+        user={user}
         onSelectSession={selectSession}
         onCreateSession={createSession}
         onDeleteSession={deleteSession}
         onTogglePersonalDocs={togglePersonalDocs}
+        onLogout={logout}
       />
 
       <ErrorModal message={error} onDismiss={() => setError(null)} />

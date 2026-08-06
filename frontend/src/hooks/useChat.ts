@@ -10,8 +10,7 @@ import type {
   UiMessage,
 } from "../types/agent";
 
-// 落库 / 续聊必须携带 user_id（G2）：默认 1，实现时务必随每次 chat 请求发送。
-const DEFAULT_USER_ID = 1;
+// 09：user_id 由后端从 JWT 令牌解析，前端不再携带（数据隔离）。
 
 // 会话 ID 生成：优先 crypto.randomUUID（需安全上下文），否则降级（评审 S2）。
 function genId(): string {
@@ -98,7 +97,6 @@ export function useChat() {
 
     const req: ChatRequest = {
       message: text,
-      user_id: DEFAULT_USER_ID,
       ...(currentSession.scene !== "Auto" ? { scene: currentSession.scene } : {}),
       // 已有 conversationId 则携带，复用后端会话上下文（M4）
       ...(currentSession.conversationId ? { conversation_id: currentSession.conversationId } : {}),

@@ -5,6 +5,9 @@ import type {
   AnalyzeResponse,
   PersonalDocument,
   PersonalKnowledgeGraph,
+  AuthUser,
+  LoginCredentials,
+  RegisterPayload,
 } from "../types/agent";
 import { mockDocuments, mockGraph } from "../mock/personalDocs";
 
@@ -23,35 +26,114 @@ export class ApiError extends Error {
   }
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+// ===== 09：鉴权令牌本地存储 =====
+export const TOKEN_KEY = "agentar_token";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// 401/403 登出广播：request 拦截到鉴权失败时清除令牌并派发，App 监听后切回登录页。
+export const UNAUTHORIZED_EVENT = "agentar:unauthorized";
+
+function authHeaders(): Record<string, string> {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+interface RequestOptions {
+  method?: string;
+  body?: BodyInit | null;
+  headers?: Record<string, string>;
+  json?: unknown;
+}
+
+// 统一请求封装：自动携带令牌、拦截 401/403 触发登出。
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const headers: Record<string, string> = { ...authHeaders(), ...(opts.headers ?? {}) };
+  if (opts.json !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      method: opts.method ?? "GET",
+      headers,
+      body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body ?? null,
     });
   } catch (e) {
     throw new ApiError(0, `网络错误，无法连接后端：${(e as Error).message}`);
+  }
+  // 鉴权失败：清令牌并广播登出（缺失令牌 401；令牌失效/禁用账号 403）。
+  if (res.status === 401 || res.status === 403) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new ApiError(res.status, `请求失败 (${res.status})${detail ? "：" + detail : ""}`);
   }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : ({} as T)) as T;
+}
+
+function post<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: "POST", json: body });
+}
+function get<T>(path: string): Promise<T> {
+  return request<T>(path, { method: "GET" });
 }
 
 export const chat = (req: ChatRequest) => post<ChatResponse>("/chat", req);
 export const analyze = (req: AnalyzeRequest) => post<AnalyzeResponse>("/analyze", req);
 
 export async function health(): Promise<{ status: string }> {
-  // 健康检查挂载在 /api 前缀下（与 chat/analyze 的 /api/v1 区分）。
+  // 健康检查挂载在 /api 前缀下（与 chat/analyze 的 /api/v1 区分），公开接口无需令牌。
   const res = await fetch("/api/health");
   if (!res.ok) throw new ApiError(res.status, `健康检查失败 (${res.status})`);
   return res.json();
 }
 
-// ===== 03 · 个人文档与知识图谱接口 =====
+// ===== 09：认证接口（契约镜像 backend/app/routes/auth.py） =====
+
+// OAuth2 密码流登录：表单格式（非 JSON），成功后存储令牌并拉取当前用户。
+export async function login(creds: LoginCredentials): Promise<AuthUser> {
+  const form = new URLSearchParams();
+  form.set("username", creds.username);
+  form.set("password", creds.password);
+  const res = await fetch(`${BASE}/auth/login/access-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", ...authHeaders() },
+    body: form.toString(),
+  });
+  if (res.status === 401 || res.status === 403) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new ApiError(res.status, `登录失败 (${res.status})${detail ? "：" + detail : ""}`);
+  }
+  const data = (await res.json()) as { access_token: string; token_type: string };
+  setToken(data.access_token);
+  return me();
+}
+
+// 注册：201 返回 UserPublic（不含密码）。
+export async function register(payload: RegisterPayload): Promise<AuthUser> {
+  return post<AuthUser>("/auth/register", payload);
+}
+
+// 当前用户：需令牌，401/403 由 request 统一拦截。
+export async function me(): Promise<AuthUser> {
+  return get<AuthUser>("/auth/me");
+}
+
+// ===== 03 · 个人文档与知识图谱接口（依赖鉴权，不再前端传 user_id） =====
 // 路径与后端一致：统一带 /api 前缀（后端 include_router(prefix="/api")）。
 
 export async function uploadDocuments(files: File[]): Promise<PersonalDocument[]> {
@@ -65,45 +147,35 @@ export async function uploadDocuments(files: File[]): Promise<PersonalDocument[]
       summary: `（Mock）文档《${f.name}》的摘要，可用于提问。`,
     }));
   }
-  const form = new FormData();
-  files.forEach((f) => form.append("files", f));
-  form.append("user_id", "1");
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/documents`, { method: "POST", body: form });
-  } catch (e) {
-    throw new ApiError(0, `网络错误，无法上传文档：${(e as Error).message}`);
-  }
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new ApiError(res.status, `上传失败 (${res.status})${detail ? "：" + detail : ""}`);
-  }
-  return (await res.json()).documents;
+  // 不手动设 Content-Type，交由浏览器写入 multipart 边界；鉴权头由 request 自动添加。
+  const res = await request<{ documents: PersonalDocument[] }>("/documents", {
+    method: "POST",
+    body: (() => {
+      const form = new FormData();
+      files.forEach((f) => form.append("files", f));
+      return form;
+    })(),
+  });
+  return res.documents;
 }
 
 export async function listDocuments(): Promise<PersonalDocument[]> {
   if (USE_MOCK) return mockDocuments;
-  const res = await fetch(`${BASE}/documents?user_id=1`);
-  if (!res.ok) throw new ApiError(res.status, "获取文档列表失败");
-  return (await res.json()).documents;
+  const res = await request<{ documents: PersonalDocument[] }>("/documents", { method: "GET" });
+  return res.documents;
 }
 
 export async function deleteDocument(id: string): Promise<void> {
   if (USE_MOCK) return;
-  const res = await fetch(`${BASE}/documents/${id}?user_id=1`, { method: "DELETE" });
-  if (!res.ok) throw new ApiError(res.status, "删除失败");
+  await request<void>(`/documents/${id}`, { method: "DELETE" });
 }
 
 export async function getDocumentStatus(id: string): Promise<PersonalDocument> {
   if (USE_MOCK) return mockDocuments.find((d) => d.id === id) ?? mockDocuments[0];
-  const res = await fetch(`${BASE}/documents/${id}/status`);
-  if (!res.ok) throw new ApiError(res.status, "获取状态失败");
-  return await res.json();
+  return request<PersonalDocument>(`/documents/${id}/status`, { method: "GET" });
 }
 
 export async function getKnowledgeGraph(): Promise<PersonalKnowledgeGraph> {
   if (USE_MOCK) return mockGraph;
-  const res = await fetch(`${BASE}/knowledge-graph?user_id=1`);
-  if (!res.ok) throw new ApiError(res.status, "获取图谱失败");
-  return await res.json();
+  return request<PersonalKnowledgeGraph>("/knowledge-graph", { method: "GET" });
 }

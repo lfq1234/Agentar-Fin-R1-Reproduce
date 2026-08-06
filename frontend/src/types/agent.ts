@@ -12,7 +12,7 @@ export const SCENE_OPTIONS: SceneOption[] = ["Auto", ...SCENES];
 export interface ChatRequest {
   message: string;
   scene?: Scene; // 省略时后端按默认 / Coordinator 路由处理
-  user_id?: number; // 落库 / 续聊必须（G2）
+  // 09：user_id 不再由前端传，改由后端从 JWT 令牌解析（数据隔离）。
   conversation_id?: number;
 }
 
@@ -91,4 +91,23 @@ export interface GraphEdge {
 export interface PersonalKnowledgeGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+// ===== 09 · 用户系统与数据隔离（前端契约，镜像 backend/auth.py 与 user.py） =====
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  email?: string | null;
+}
+
+export interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+export interface RegisterPayload {
+  username: string;
+  password: string;
+  email?: string;
 }
