@@ -17,7 +17,7 @@ from app.db.models.message import (
     Message,
     MessageBase,
 )
-from app.db.models.user import User
+from app.db.models.user import User, UserCreate, UserPublic, UserRegister
 
 __all__ = [
     "engine",
@@ -25,6 +25,9 @@ __all__ = [
     "get_db",
     "init_db",
     "User",
+    "UserCreate",
+    "UserPublic",
+    "UserRegister",
     "Conversation",
     "ConversationBase",
     "Message",

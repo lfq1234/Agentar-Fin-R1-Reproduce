@@ -11,8 +11,10 @@ from app.db.models import (
     AnalyzeResponse,
     ChatRequest,
     ChatResponse,
+    User,
     get_db,
 )
+from app.routes.deps import CurrentUser, SessionDep
 from app.services.analyze_service import analyze as analyze_service
 from app.services.chat_service import chat as chat_service
 
@@ -27,9 +29,11 @@ async def health() -> dict[str, str]:
 @router.post("/v1/chat", response_model=ChatResponse)
 async def chat_endpoint(
     req: ChatRequest,
-    db: Optional[AsyncSession] = Depends(get_db),
+    current_user: User = CurrentUser,
+    db: Optional[AsyncSession] = SessionDep,
 ) -> ChatResponse:
-    return await chat_service(req, db)
+    # 09：user_id 由鉴权令牌解析（不再信任请求体 user_id）。
+    return await chat_service(req, db, user_id=current_user.id)
 
 
 @router.post("/v1/analyze", response_model=AnalyzeResponse)

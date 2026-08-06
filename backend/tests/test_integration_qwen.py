@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,8 +25,23 @@ _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "agentar.db")
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:  # 触发 lifespan -> init_db
+    with TestClient(app) as c:  # 触发 lifespan -> init_db + 迁移
         yield c
+
+
+@pytest.fixture
+def auth_headers(client):
+    """09：注册并登录一个测试用户，返回带 Bearer 的 headers（chat 现需鉴权）。"""
+    uname = "it_" + uuid.uuid4().hex[:10]
+    r = client.post("/api/v1/auth/register", json={"username": uname, "password": "password123"})
+    assert r.status_code == 201, r.text
+    lr = client.post(
+        "/api/v1/auth/login/access-token",
+        data={"username": uname, "password": "password123"},
+    )
+    assert lr.status_code == 200, lr.text
+    token = lr.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_health(client):
@@ -34,17 +50,18 @@ def test_health(client):
     assert r.json() == {"status": "ok"}
 
 
-def test_chat_returns_reply(client):
+def test_chat_returns_reply(client, auth_headers):
     r = client.post(
         "/api/v1/chat",
-        json={"message": "存款保险的最高偿付限额是多少？", "scene": "Banking", "user_id": 1},
+        json={"message": "存款保险的最高偿付限额是多少？", "scene": "Banking"},
+        headers=auth_headers,
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert isinstance(body["reply"], str) and body["reply"].strip(), "reply 为空"
     assert isinstance(body["compliance_notes"], list)
     assert isinstance(body["risk_flags"], list)
-    assert body["conversation_id"] is not None, "带 user_id 应返回 conversation_id"
+    assert body["conversation_id"] is not None, "带鉴权应返回 conversation_id"
 
 
 def test_analyze_structured(client):
@@ -60,10 +77,11 @@ def test_analyze_structured(client):
     assert isinstance(b["expression"], str)
 
 
-def test_continuation_and_persistence(client):
+def test_continuation_and_persistence(client, auth_headers):
     r1 = client.post(
         "/api/v1/chat",
-        json={"message": "你好，我想了解理财风险", "scene": "Banking", "user_id": 2},
+        json={"message": "你好，我想了解理财风险", "scene": "Banking"},
+        headers=auth_headers,
     )
     assert r1.status_code == 200, r1.text
     cid = r1.json()["conversation_id"]
@@ -71,7 +89,8 @@ def test_continuation_and_persistence(client):
 
     r2 = client.post(
         "/api/v1/chat",
-        json={"message": "继续讲讲", "scene": "Banking", "user_id": 2, "conversation_id": cid},
+        json={"message": "继续讲讲", "scene": "Banking", "conversation_id": cid},
+        headers=auth_headers,
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["conversation_id"] == cid, "续聊 conversation_id 应一致"
@@ -89,7 +108,7 @@ def test_continuation_and_persistence(client):
     assert n_msg >= 2, f"消息未落库（期望>=2，实际 {n_msg}）"
 
 
-def test_degradation_when_model_down(client):
+def test_degradation_when_model_down(client, auth_headers):
     """模型不可达时链路应返回清晰错误（5xx），而非静默崩溃。
 
     复用已运行的后端进程；本节依赖模型服务在测试时不可达。
@@ -117,7 +136,8 @@ def test_degradation_when_model_down(client):
     try:
         r = client.post(
             "/api/v1/chat",
-            json={"message": "模型挂了会怎样", "scene": "Banking", "user_id": 9},
+            json={"message": "模型挂了会怎样", "scene": "Banking"},
+            headers=auth_headers,
         )
         assert r.status_code >= 500, f"期望 5xx，实际 {r.status_code}: {r.text}"
         assert ("vLLM" in r.text) or ("模型" in r.text) or ("ModelInvokeError" in r.text), (

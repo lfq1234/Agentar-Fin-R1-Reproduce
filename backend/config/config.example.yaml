@@ -45,6 +45,13 @@ db:
   sqlite_path: ./agentar.db  # SQLite 库文件路径（相对 backend/ 运行目录）
   echo: false                # SQLAlchemy echo（调试用）
 
+# —— 09-用户系统与数据隔离：鉴权配置 ——
+# secret_key 经 ${AUTH_SECRET_KEY} 从环境变量注入（backend/.env），禁止明文入库；
+# 缺失即启动失败（需求 S3，lifespan eager 校验）。
+security:
+  secret_key: ${AUTH_SECRET_KEY}
+  access_token_expire_minutes: 1440   # 令牌有效期（默认 24h）
+
 # —— 03-传统后端基础层：服务配置 ——
 server:
   host: 0.0.0.0

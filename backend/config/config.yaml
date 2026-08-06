@@ -44,6 +44,13 @@ db:
   sqlite_path: ./agentar.db
   echo: false
 
+# —— 09-用户系统与数据隔离：鉴权配置 ——
+# secret_key 经 ${AUTH_SECRET_KEY} 从环境变量注入（backend/.env），禁止明文入库；
+# 缺失即启动失败（需求 S3，lifespan eager 校验）。
+security:
+  secret_key: ${AUTH_SECRET_KEY}
+  access_token_expire_minutes: 1440   # 令牌有效期（默认 24h）
+
 # —— 07-会话历史记录（Session History & Trace） ——
 # 复用 03 主库（db.sqlite_path 指定的 agentar.db），不另开文件；
 # 作为 service 层（落库/查询/检索/导出）+ view 层（跨表聚合），旁路异步写入，失败不阻塞主链路。

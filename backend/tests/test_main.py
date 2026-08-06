@@ -10,8 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent.system import AgentResult
-from app.db.models import get_db as real_get_db
+from app.db.models import User, get_db as real_get_db
 from app.main import app
+from app.routes.deps import get_current_user
 
 
 @pytest.fixture
@@ -44,9 +45,16 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     app.dependency_overrides[real_get_db] = _fake_get_db
 
+    # 09：chat 现需鉴权；无库降级路径下用桩用户覆盖 get_current_user，保持测试有效。
+    async def _fake_user() -> User:
+        return User(id=1, username="tester", is_active=True)
+
+    app.dependency_overrides[get_current_user] = _fake_user
+
     yield TestClient(app)
 
     app.dependency_overrides.pop(real_get_db, None)
+    app.dependency_overrides.pop(get_current_user, None)
     return TestClient(app)
 
 

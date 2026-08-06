@@ -9,9 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import config
+from app.core import security
 from app.db.models import init_db
 from app.db.history import init_history_db, install_history_tracing
+from app.db.migrate import migrate_user_columns
 from app.model.exceptions import ModelInvokeError
+from app.routes import auth as auth_routes
 from app.routes import chat as chat_routes
 from app.routes import documents as documents_routes
 from app.routes import history as history_routes
@@ -19,7 +22,11 @@ from app.routes import history as history_routes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 09：secret_key 缺失即启动失败（需求 S3，评审 M2 eager 校验）。
+    security.get_secret_key()
     await init_db()
+    # 09：补齐 users 表新列（保留旧 agentar.db，不重建）。
+    await migrate_user_columns()
     # 07-会话历史记录：幂等建表 + 无侵入包裹 chat_service.chat
     await init_history_db()
     install_history_tracing()
@@ -54,6 +61,8 @@ app.include_router(chat_routes.router, prefix="/api")
 app.include_router(history_routes.router, prefix="/api")
 # 08-个人文档：/api/v1/documents、/api/v1/knowledge-graph、/api/v1/rag/retrieve
 app.include_router(documents_routes.router, prefix="/api")
+# 09-用户系统与数据隔离：/api/v1/auth/register、/login/access-token、/me
+app.include_router(auth_routes.router, prefix="/api")
 
 
 @app.exception_handler(ModelInvokeError)

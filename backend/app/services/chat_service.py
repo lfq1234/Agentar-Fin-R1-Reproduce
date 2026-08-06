@@ -15,12 +15,12 @@ from app.agent import run as agent_run
 from app.db.models import ChatRequest, ChatResponse, Conversation, Message, User
 
 
-async def _persist(db: AsyncSession, req: ChatRequest, reply: str) -> int:
-    """落库并返回 conversation_id（未知 user_id 自动 upsert）。"""
-    # (a) upsert User
-    user = await db.get(User, req.user_id)
+async def _persist(db: AsyncSession, req: ChatRequest, reply: str, user_id: int) -> int:
+    """落库并返回 conversation_id；user_id 来自鉴权后的当前用户（09）。"""
+    # (a) 取已存在的用户（鉴权保证存在；兜底：极端无库路径下重建占位用户，保持兼容）。
+    user = await db.get(User, user_id)
     if user is None:
-        user = User(id=req.user_id, username=f"user_{req.user_id}")
+        user = User(id=user_id, username=f"user_{user_id}", is_active=True)
         db.add(user)
         await db.flush()
 
@@ -47,14 +47,16 @@ async def _persist(db: AsyncSession, req: ChatRequest, reply: str) -> int:
     return conv.id
 
 
-async def chat(req: ChatRequest, db: Optional[AsyncSession]) -> ChatResponse:
+async def chat(req: ChatRequest, db: Optional[AsyncSession], user_id: Optional[int] = None) -> ChatResponse:
+    # 09：user_id 优先取鉴权后的当前用户；兼容未接鉴权的旧调用方（回退 req.user_id）。
+    uid = user_id if user_id is not None else req.user_id
     # 08：use_personal_docs 仅在同时给出 user_id 时生效（无归属 → 不可检索个人文档）。
-    use_personal_docs = bool(getattr(req, "use_personal_docs", False)) and req.user_id is not None
+    use_personal_docs = bool(getattr(req, "use_personal_docs", False)) and uid is not None
     result = await agent_run(
         message=req.message,
         scene=req.scene,
         structured=False,
-        user_id=req.user_id,
+        user_id=uid,
         use_personal_docs=use_personal_docs,
     )
     reply = result.reply
@@ -62,8 +64,8 @@ async def chat(req: ChatRequest, db: Optional[AsyncSession]) -> ChatResponse:
     risk_flags = result.risk_flags or []
 
     conversation_id: Optional[int] = None
-    if db is not None and req.user_id is not None:
-        conversation_id = await _persist(db, req, reply)
+    if db is not None and uid is not None:
+        conversation_id = await _persist(db, req, reply, uid)
 
     return ChatResponse(
         reply=reply,
