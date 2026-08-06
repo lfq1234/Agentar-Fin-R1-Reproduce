@@ -10,12 +10,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent.system import AgentResult
+from app.db.models import get_db as real_get_db
 from app.main import app
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    async def fake_run(message, scene=None, structured=False) -> AgentResult:
+    async def fake_run(message, scene=None, structured=False, user_id=None, use_personal_docs=False) -> AgentResult:
         if structured:
             return AgentResult(
                 reply="分析完成",
@@ -33,6 +34,19 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # services 内 `from app.agent import run as agent_run`，monkeypatch 其模块级绑定。
     monkeypatch.setattr("app.services.chat_service.agent_run", fake_run)
     monkeypatch.setattr("app.services.analyze_service.agent_run", fake_run)
+
+    # 本测试只验证「无库也能跑」的降级路径：用 dependency_overrides 把 get_db 换成
+    # 产出 None 的桩，使 chat/analyze 跳过落库（不依赖 config.yaml 的 db.enabled 取值）。
+    # 注意：路由用 Depends(get_db) 捕获的是函数对象本身，monkeypatch 模块属性无效，
+    # 必须用 FastAPI 的 dependency_overrides 才能生效。
+    async def _fake_get_db():
+        yield None
+
+    app.dependency_overrides[real_get_db] = _fake_get_db
+
+    yield TestClient(app)
+
+    app.dependency_overrides.pop(real_get_db, None)
     return TestClient(app)
 
 

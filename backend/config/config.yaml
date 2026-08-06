@@ -74,10 +74,14 @@ server:
     headers:
       - "*"
 
-# —— 06-知识库（DuckDB 向量检索 + SQLite 文件存储） ——
+# —— 06-知识库（DuckDB 向量检索 + SQLite 主库存储） ——
+# 08 评审 B1：知识库不再另开 kb/knowledge.db，chunks/kb_meta 直接落 03 主库
+# （db.sqlite_path 指定的 agentar.db），与 08 个人文档共用同一条 DuckDB 挂载连接，
+# 使「公共知识库 + 个人文档」可在一次检索内联合召回。
 kb:
-  engine: duckdb              # duckdb（默认：SQLite 文件存储 + DuckDB 向量检索）| sqlite（纯 SQLite 回落）
-  path: ./kb/knowledge.db     # 知识库 SQLite 文件（文档/块/向量均落此文件；DuckDB 挂载它做向量检索）
+  engine: duckdb              # duckdb（默认：SQLite 主库存储 + DuckDB 向量检索）| sqlite（纯 SQLite 回落）
+  path: ./agentar.db          # 收口到 03 主库；留空则自动取 db.sqlite_path
+  corpus_dir: ./kb            # 语料源目录（.md/.txt/.html），与库文件解耦；build 脚本扫描此目录
   embed_dim: 0                # 0=自适应（取首个 embedding 维度）；非 0 固定
   use_vss: false              # 挂载的 SQLite 表无法建 DuckDB 原生 HNSW，保留占位（走精确扫描）
   build_on_startup: false     # lifespan 阶段是否自动构建 kb/（默认手动 build 脚本）
@@ -87,3 +91,20 @@ kb:
   local_embed:
     enabled: false            # true 时启用进程内嵌入直载（不依赖外部嵌入服务）
     model_path: ${LOCAL_EMBED_MODEL_PATH}   # 本地嵌入模型目录，由环境变量/本地 secret 注入，不入库
+
+# —— 08-个人文档与知识图谱后端（服务前端 03 双标签面板） ——
+# 结构化表（personal_documents / personal_doc_chunks / personal_graph_*）与向量表
+# personal_doc_chunk_embeddings 全部落 db.sqlite_path 主库，不另开文件。
+personal_docs:
+  enabled: true
+  max_file_mb: 10             # 单文件大小上限，超限记 status=error（不抛 500）
+  chunk:
+    max_chars: 600
+    overlap: 80
+  graph:
+    enabled: true
+    model: none               # auto=走 01 get_model() 抽取（需模型可用）；none=仅启发式，永不阻塞
+  rag:
+    enabled: true             # 是否允许个人文档参与 04 RAG 检索（评审 S4）
+    top_k: 3                  # /v1/rag/retrieve 与 chat 检索的默认片段数
+  embed_dim: 0                # 0=自适应（首个向量定维）

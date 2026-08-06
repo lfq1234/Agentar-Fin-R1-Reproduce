@@ -48,7 +48,15 @@ async def _persist(db: AsyncSession, req: ChatRequest, reply: str) -> int:
 
 
 async def chat(req: ChatRequest, db: Optional[AsyncSession]) -> ChatResponse:
-    result = await agent_run(message=req.message, scene=req.scene, structured=False)
+    # 08：use_personal_docs 仅在同时给出 user_id 时生效（无归属 → 不可检索个人文档）。
+    use_personal_docs = bool(getattr(req, "use_personal_docs", False)) and req.user_id is not None
+    result = await agent_run(
+        message=req.message,
+        scene=req.scene,
+        structured=False,
+        user_id=req.user_id,
+        use_personal_docs=use_personal_docs,
+    )
     reply = result.reply
     compliance_notes = result.compliance_notes or []
     risk_flags = result.risk_flags or []

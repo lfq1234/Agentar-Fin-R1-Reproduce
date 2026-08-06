@@ -20,6 +20,7 @@ from agentscope.message import Msg
 
 from app.agent.agents import SCENES, build_agents
 from app.agent.model_bridge import AgentarModel, extract_content
+from app.agent.rag_scope import scoped
 from app.model import get_model
 from app.model.exceptions import ModelInvokeError
 
@@ -115,6 +116,8 @@ async def run(
     message: str,
     scene: Optional[str] = None,
     structured: bool = False,
+    user_id: Optional[int] = None,
+    use_personal_docs: bool = False,
 ) -> AgentResult:
     """多智能体流水线主入口。
 
@@ -122,6 +125,8 @@ async def run(
         message (`str`): 用户输入。
         scene (`str | None`): 业务场景；为 None 时由 Coordinator 判定。
         structured (`bool`): 是否附带结构化分析（intent / slots / tool_plan / expression）。
+        user_id (`int | None`): 08-个人文档的归属用户；仅用于检索作用域，不进提示词。
+        use_personal_docs (`bool`): 是否把该用户的个人文档并入 RAG 召回。
 
     Returns:
         `AgentResult`: 含最终回复、建议式合规/风险结论、可选结构化字段。
@@ -143,22 +148,25 @@ async def run(
             scene_text = await _call_agent(sys.agents["coordinator"], route_msg)
             scene = _parse_scene(scene_text) or "Banking"
 
-        # 2) RAG 检索（经 RAG ReActAgent 的 retrieve 工具，本期返回占位上下文）
+        # 2) RAG 检索（经 RAG ReActAgent 的 retrieve 工具 → 06 知识库 + 08 个人文档）
+        #    检索作用域用 contextvars 下传，工具签名保持只有 query（防 LLM 编造 user_id）。
         rag_msg = Msg(
             name="user",
             content=f"请检索与以下问题相关的资料：{message}",
             role="user",
         )
-        context = await _call_agent(sys.agents["rag"], rag_msg)
+        with scoped(user_id=user_id, use_personal_docs=use_personal_docs):
+            context = await _call_agent(sys.agents["rag"], rag_msg)
 
-        # 3) 领域专家作答（消费检索上下文）
-        expert = sys.agents[scene]
-        expert_msg = Msg(
-            name="user",
-            content=f"参考上下文：\n{context}\n\n用户问题：{message}",
-            role="user",
-        )
-        draft = await _call_agent(expert, expert_msg)
+            # 3) 领域专家作答（消费检索上下文；专家自身也可能再调 lookup_knowledge，
+            #    故一并置于同一作用域内）
+            expert = sys.agents[scene]
+            expert_msg = Msg(
+                name="user",
+                content=f"参考上下文：\n{context}\n\n用户问题：{message}",
+                role="user",
+            )
+            draft = await _call_agent(expert, expert_msg)
 
         # 4) 审核（建议式，不阻断）
         review_msg = Msg(

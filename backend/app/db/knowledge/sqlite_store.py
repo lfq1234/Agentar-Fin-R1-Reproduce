@@ -258,7 +258,16 @@ class SQLiteKnowledgeStore:
 
         return [self._to_passage(cands[i], fused[i]) for i in ranked]
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[Passage]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 3,
+        *,
+        user_id: Optional[int] = None,
+        use_personal_docs: bool = False,
+    ) -> list[Passage]:
+        """纯 SQLite 回落：签名与 DuckDB 后端对齐；个人文档检索仅 duckdb 引擎支持，
+        本后端忽略 ``user_id`` / ``use_personal_docs``（不静默改变公共库结果）。"""
         return self.search(query, top_k=top_k)
 
     # —— 生命周期 —— #

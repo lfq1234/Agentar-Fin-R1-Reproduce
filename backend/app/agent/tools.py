@@ -12,6 +12,9 @@ from agentscope.service import ServiceToolkit
 
 # 06 演进：检索后端切到 DuckDB/SQLite 知识库（get_knowledge_store 按 kb.engine 分发），
 # 不再使用 04 的占位 retrieve（空库）。导入链为纯 Python，无 torch 依赖。
+# 08 演进：个人文档检索的 user_id 不作为工具入参（LLM 可编造他人 id → 越权），
+# 改由 run() 通过 contextvars 设置作用域，工具内部读取。
+from app.agent.rag_scope import current_scope
 from app.db.knowledge import get_knowledge_store, Passage
 from app.db.knowledge.chunking import format_passages
 
@@ -28,12 +31,18 @@ def lookup_knowledge(query: str) -> str:
     Returns:
         `str`: 检索到的知识文本（含引用标记）；无结果时返回提示。
     """
-    passages: list[Passage] = get_knowledge_store().retrieve(query)
+    # user_id / use_personal_docs 来自请求作用域，非模型可控入参。
+    scope = current_scope()
+    passages: list[Passage] = get_knowledge_store().retrieve(
+        query,
+        user_id=scope.user_id,
+        use_personal_docs=scope.use_personal_docs,
+    )
     return format_passages(passages)
 
 
 def retrieve_documents(query: str) -> str:
-    """检索监管条文 / 产品资料 / 知识库，返回与 query 最相关的文档片段。
+    """检索监管条文 / 产品资料 / 用户上传的个人文档，返回与 query 最相关的文档片段。
 
     Args:
         query (`str`): 检索关键词。

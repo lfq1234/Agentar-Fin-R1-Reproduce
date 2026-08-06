@@ -1,45 +1,29 @@
 """07-采集钩子集成测试：无侵入包裹 chat_service.chat。
 
-通过向 sys.modules 注入假的 ``app.agent.system``（提供 AgentResult）与假的
-``app.services.chat_service``，避免引入 agentscope 等重依赖，验证：
+验证：
 - install_history_tracing 能在不修改 03 源码的情况下记录历史；
 - 主链路返回原 resp 且不被采集异常阻断（评审：无侵入 + 降级不阻塞）；
 - resp.conversation_id 为 None / 无 user_id 时安全跳过；
 - scene 取自请求侧（ChatResponse 无 scene 字段，回归校验 resp.scene 已修复）。
+
+说明：原实现向 sys.modules 注入假 app.services.chat_service 以避免加载 agentscope，
+但该方式在 pytest 收集期会被其它模块（如 test_main 导入 app.main 时把 chat_service
+绑定到 app.services 包命名空间）污染，导致全量跑时 hooks 拿到的是真实模块。
+本版改为直接 monkeypatch 真实 chat_service.chat 为桩函数——更稳妥、且不污染
+其它测试模块的顶层导入（agentscope 在 envs/default 已安装，且 hooks 对其为惰性导入）。
 """
 from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import tempfile
-import types
 
 import pytest
 import pytest_asyncio
 
-# —— 在任何 app.db.history 导入前注入假依赖（避免 agentscope 真正加载） —— #
-_agent_system = types.ModuleType("app.agent.system")
-
-
-class _AgentResult:
-    def __init__(self, reply="", compliance_notes=None, risk_flags=None):
-        self.reply = reply
-        self.compliance_notes = compliance_notes or []
-        self.risk_flags = risk_flags or []
-
-
-_agent_system.AgentResult = _AgentResult
-_agent_system.__fake__ = True
-sys.modules.setdefault("app.agent", types.ModuleType("app.agent"))
-sys.modules["app.agent.system"] = _agent_system
-_chat_service_mod = types.ModuleType("app.services.chat_service")
-_chat_service_mod.__fake__ = True
-_chat_service_mod.chat = None
-sys.modules["app.services.chat_service"] = _chat_service_mod
-
-from app.db.history import hooks  # noqa: E402
-from app.db.history import store as storemod  # noqa: E402
+from app.db.history import hooks
+from app.db.history import store as storemod
+from app.services import chat_service as chat_service_mod
 
 
 class _Resp:
@@ -83,9 +67,8 @@ async def _original_chat(req, db):
 
 
 @pytest.mark.asyncio
-async def test_traced_chat_records_and_returns_resp(store):
-    cs = sys.modules["app.services.chat_service"]
-    cs.chat = _original_chat
+async def test_traced_chat_records_and_returns_resp(store, monkeypatch):
+    monkeypatch.setattr(chat_service_mod, "chat", _original_chat)
     traced = hooks.install_history_tracing()
 
     req = _Req(user_id="u1", message="请解释GDP", scene="qa")
@@ -102,10 +85,9 @@ async def test_traced_chat_records_and_returns_resp(store):
 
 
 @pytest.mark.asyncio
-async def test_traced_chat_scene_from_request(store):
+async def test_traced_chat_scene_from_request(store, monkeypatch):
     # 回归：scene 必须来自 req（ChatResponse 无 scene 字段），且不能抛 AttributeError
-    cs = sys.modules["app.services.chat_service"]
-    cs.chat = _original_chat
+    monkeypatch.setattr(chat_service_mod, "chat", _original_chat)
     traced = hooks.install_history_tracing()
     req = _Req(user_id="u1", message="hi", scene="invest")
     resp = await traced(req, None)
@@ -116,12 +98,11 @@ async def test_traced_chat_scene_from_request(store):
 
 
 @pytest.mark.asyncio
-async def test_traced_chat_skips_when_no_conversation(store):
+async def test_traced_chat_skips_when_no_conversation(store, monkeypatch):
     async def _no_conv(req, db):
         return _Resp(reply="x", conversation_id=None)
 
-    cs = sys.modules["app.services.chat_service"]
-    cs.chat = _no_conv
+    monkeypatch.setattr(chat_service_mod, "chat", _no_conv)
     traced = hooks.install_history_tracing()
     req = _Req(user_id="u1", message="hi", scene="qa")
     resp = await traced(req, None)
@@ -131,10 +112,9 @@ async def test_traced_chat_skips_when_no_conversation(store):
 
 
 @pytest.mark.asyncio
-async def test_traced_chat_async_write_schedules_task(store):
+async def test_traced_chat_async_write_schedules_task(store, monkeypatch):
     # 异步写入路径：create_task 后任务应在事件循环中完成，且主链路不阻塞
-    cs = sys.modules["app.services.chat_service"]
-    cs.chat = _original_chat
+    monkeypatch.setattr(chat_service_mod, "chat", _original_chat)
     # 重建为 async_write=True 的 store
     await store.close()
     tmp = tempfile.mkdtemp()

@@ -43,6 +43,9 @@ class ChatRequest(ConversationBase):
     message: str = Field(min_length=1)
     user_id: Optional[int] = None  # 临时方案：请求体携带；接鉴权后改 token 解析
     conversation_id: Optional[int] = None  # 续聊
+    # 08-个人文档：为 true 时把 user_id 名下已入库的个人文档并入 RAG 召回。
+    # 服务端强制以 user_id 为作用域，模型侧不可见该字段（防越权）。
+    use_personal_docs: bool = False
 
 
 class ChatResponse(ConversationBase):

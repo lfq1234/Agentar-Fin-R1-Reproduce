@@ -108,3 +108,61 @@ CREATE TABLE IF NOT EXISTS history_embeddings (
     dim             INTEGER,
     model           TEXT                 -- embedder 版本（评审 S5：切换需重建）
 );
+
+-- ============================================================
+-- 08-个人文档与知识图谱后端（评审 B1：不另开 *.db，四表落同一主库）
+-- 关联：docs/08-个人文档与知识图谱后端/技术文档.md §4.1
+-- 向量表 personal_doc_chunk_embeddings 定义在 schema/duckdb/personal_docs.sql，
+--   同样建在本主库文件内（DuckDB 经 ATTACH 挂载做 list_cosine_distance 检索）。
+-- ============================================================
+
+-- 八、personal_documents（个人文档元数据；status: pending|parsing|done|error）
+CREATE TABLE IF NOT EXISTS personal_documents (
+    id          TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL,
+    filename    TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    status      TEXT NOT NULL,
+    error       TEXT,
+    uploaded_at TEXT NOT NULL,
+    summary     TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_pdoc_user ON personal_documents(user_id);
+
+-- 九、personal_doc_chunks（切分块，复用 06/04 chunking）
+CREATE TABLE IF NOT EXISTS personal_doc_chunks (
+    id       TEXT PRIMARY KEY,
+    doc_id   TEXT NOT NULL,
+    user_id  INTEGER NOT NULL,
+    idx      INTEGER NOT NULL,
+    text     TEXT NOT NULL,
+    chapter  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pchunk_doc ON personal_doc_chunks(doc_id);
+CREATE INDEX IF NOT EXISTS ix_pchunk_user ON personal_doc_chunks(user_id);
+
+-- 十、personal_graph_nodes（图谱节点）
+CREATE TABLE IF NOT EXISTS personal_graph_nodes (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL,
+    user_id         INTEGER NOT NULL,
+    label           TEXT NOT NULL,
+    type            TEXT NOT NULL,
+    source_doc_id   TEXT NOT NULL,
+    properties_json TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pgn_doc ON personal_graph_nodes(doc_id);
+
+-- 十一、personal_graph_edges（图谱边）
+CREATE TABLE IF NOT EXISTS personal_graph_edges (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL,
+    user_id         INTEGER NOT NULL,
+    source          TEXT NOT NULL,
+    target          TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    source_doc_id   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_pge_doc ON personal_graph_edges(doc_id);

@@ -13,7 +13,7 @@ from sqlmodel import SQLModel, select
 
 from app.agent.system import AgentResult
 from app.db.models import ChatRequest, Conversation, Message, User
-from app.services.chat_service import chat_service
+from app.services import chat_service  # 需要模块对象本身（monkeypatch 其内的 agent_run）
 
 
 @pytest_asyncio.fixture
@@ -31,7 +31,7 @@ async def session():
     await engine.dispose()
 
 
-async def _fake_run(message, scene=None, structured=False) -> AgentResult:
+async def _fake_run(message, scene=None, structured=False, user_id=None, use_personal_docs=False) -> AgentResult:
     return AgentResult(reply="这是回复", compliance_notes=["c"], risk_flags=["r"])
 
 

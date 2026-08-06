@@ -14,6 +14,7 @@ dependencies = [
     "sqlmodel>=0.0.16",   # 03-传统后端基础层：ORM + Pydantic 统一（兼容 Pydantic v2）
     "aiosqlite>=0.19",
     "duckdb>=1.1.0",    # 06-知识库：DuckDB 向量存储（list_cosine_distance 需 >=1.1）    # 03-传统后端基础层：异步 SQLite 驱动（sqlite+aiosqlite://）
+    "python-multipart>=0.0.9",  # 08-个人文档：/v1/documents 走 multipart 上传（UploadFile/Form）
 ]
 
 [tool.uv]

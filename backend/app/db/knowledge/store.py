@@ -16,12 +16,10 @@ from __future__ import annotations
 import os
 import re
 import json
-import sqlite3
 from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence, runtime_checkable
 
-import duckdb
-
+from app.db import duckdb_conn
 from app.db.knowledge.chunking import (
     Passage,
     InconsistentDimensionError,
@@ -68,7 +66,14 @@ class KnowledgeStore(Protocol):
         vec_weight: float = 0.7,
     ) -> list[Passage]: ...
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[Passage]: ...
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 3,
+        *,
+        user_id: Optional[int] = None,
+        use_personal_docs: bool = False,
+    ) -> list[Passage]: ...
 
     def vector_search(
         self,
@@ -136,13 +141,10 @@ class DuckDBKnowledgeStore:
         self._chunk_overlap = chunk_overlap
         self._kb_dir = kb_dir
         self._reranker = reranker
-        # 文件存储：SQLite 文件（若不存在先创建空库），再由 DuckDB 挂载做向量检索
-        if not os.path.exists(sqlite_path):
-            sqlite3.connect(sqlite_path).close()
-        self._conn = duckdb.connect(":memory:")
-        self._conn.execute(
-            f"ATTACH '{sqlite_path}' AS kb (TYPE sqlite, READ_WRITE)"
-        )
+        # 文件存储：SQLite 文件（若不存在先建空库），再由 DuckDB ATTACH 挂载做向量检索。
+        # 评审 B1：默认指向 03 主库 agentar.db，与 08 个人文档共用同一条 DuckDB 连接
+        # （见 app/db/duckdb_conn.py），避免双写者竞争，也让两类语料同 catalog 可联合检索。
+        self._conn = duckdb_conn.get_attached(sqlite_path, alias="kb")
         self._init_schema()
         # 维度自适应：从库内已有数据 seed（跨进程一致）
         if self._fixed_dim is None:
@@ -363,6 +365,69 @@ class DuckDBKnowledgeStore:
         order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
         return [(rows[i], None, float(scores[i])) for i in order]
 
+    # —— 个人文档召回（08，评审 B2：用户作用域） —— #
+    # 08 的 personal_doc_chunk_embeddings / personal_doc_chunks 与 kb.chunks 同库同连接，
+    # 故可在同一 DuckDB catalog 内检索；synthetic id 取 -rowid，与 kb.chunks 的正 rowid
+    # 天然不冲突，可直接进 _union_recall 融合。库内无 08 表时静默返回空（06 独立可用）。
+    _PERSONAL_COLS = (
+        "-c.rowid AS id, c.doc_id, d.filename AS title, c.text AS content, "
+        "coalesce(c.chapter, '') AS chapter, coalesce(d.uploaded_at, '') AS uploaded_at"
+    )
+
+    @staticmethod
+    def _personal_row(r: Sequence) -> _Row:
+        return _Row(
+            id=int(r[0]),
+            doc_id=r[1] or "",
+            title=r[2] or "",
+            agency="",
+            doc_type="personal",  # 下游据此区分「个人文档 / 公共知识库」来源
+            domain="",
+            version="",
+            chapter=r[4] or "",
+            content=r[3],
+            effective_date=r[5] or "",
+        )
+
+    def _personal_vector_recall(
+        self, qvec: list[float], k: int, user_id: int
+    ) -> list[tuple[_Row, Optional[float], None]]:
+        sql = (
+            f"SELECT {self._PERSONAL_COLS}, "
+            "1 - list_cosine_distance(e.embedding::FLOAT[], ?::FLOAT[]) AS similarity "
+            "FROM kb.personal_doc_chunk_embeddings e "
+            "JOIN kb.personal_doc_chunks c ON c.id = e.chunk_id "
+            "JOIN kb.personal_documents d ON d.id = c.doc_id "
+            "WHERE e.user_id = ? AND d.status = 'done' "
+            "ORDER BY similarity DESC LIMIT ?"
+        )
+        try:
+            rows = self._conn.execute(sql, [qvec, user_id, k]).fetchall()
+        except Exception:
+            return []
+        return [(self._personal_row(r), float(r[6]), None) for r in rows]
+
+    def _personal_bm25_recall(
+        self, query: str, k: int, user_id: int
+    ) -> list[tuple[_Row, None, float]]:
+        sql = (
+            f"SELECT {self._PERSONAL_COLS} "
+            "FROM kb.personal_doc_chunks c "
+            "JOIN kb.personal_documents d ON d.id = c.doc_id "
+            "WHERE c.user_id = ? AND d.status = 'done'"
+        )
+        try:
+            raw = self._conn.execute(sql, [user_id]).fetchall()
+        except Exception:
+            return []
+        if not raw:
+            return []
+        rows = [self._personal_row(r) for r in raw]
+        bm25 = _BM25([r.content for r in rows])
+        scores = bm25.scores(query)
+        order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+        return [(rows[i], None, float(scores[i])) for i in order]
+
     @staticmethod
     def _union_recall(
         vec_rows: list, bm25_rows: list
@@ -386,8 +451,15 @@ class DuckDBKnowledgeStore:
         effective_after: Optional[str] = None,
         vec_weight: float = 0.7,
         rerank: bool = False,
+        user_id: Optional[int] = None,
+        use_personal_docs: bool = False,
     ) -> list[Passage]:
-        """双路召回（向量 + BM25，各自全库独立召回）取并集，min-max 归一化后加权融合重排。"""
+        """双路召回（向量 + BM25，各自全库独立召回）取并集，min-max 归一化后加权融合重排。
+
+        ``use_personal_docs=True`` 且给定 ``user_id`` 时，额外并入 08 该用户的个人文档块
+        （同库同连接，评审 B2）；个人文档不参与 domain / effective_date 元数据过滤，
+        因其无监管元数据，过滤条件仅对公共知识库生效。
+        """
         beta = 3  # 扩召回倍数
         qvec = self._embed([query])[0]
 
@@ -396,6 +468,15 @@ class DuckDBKnowledgeStore:
         # 召回②：关键词路，全库（元数据预过滤后）独立召回 top_k*beta 候选
         #   BM25 是查询相关模型，对任意文本可打分，能补回向量漏召的块（评审 B1）
         bm25_rows = self._bm25_recall(query, top_k * beta, domain, effective_after)
+
+        # 召回③④：个人文档（用户作用域），同样双路，与公共库候选统一融合
+        if use_personal_docs and user_id is not None:
+            vec_rows = vec_rows + self._personal_vector_recall(
+                qvec, top_k * beta, user_id
+            )
+            bm25_rows = bm25_rows + self._personal_bm25_recall(
+                query, top_k * beta, user_id
+            )
 
         cand = self._union_recall(vec_rows, bm25_rows)
         if not cand:
@@ -430,9 +511,21 @@ class DuckDBKnowledgeStore:
             for i in ranked
         ]
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[Passage]:
-        """02 既有契约：召回 + 重排，默认 top_k=3。"""
-        return self.search(query, top_k=top_k)
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 3,
+        *,
+        user_id: Optional[int] = None,
+        use_personal_docs: bool = False,
+    ) -> list[Passage]:
+        """02 既有契约：召回 + 重排，默认 top_k=3（可选并入个人文档，评审 B2）。"""
+        return self.search(
+            query,
+            top_k=top_k,
+            user_id=user_id,
+            use_personal_docs=use_personal_docs,
+        )
 
     def vector_search(
         self,
@@ -539,7 +632,8 @@ class DuckDBKnowledgeStore:
         return total
 
     def close(self) -> None:
-        self._conn.close()
+        """关闭并逐出共享连接（同库其它使用者会在下次调用时重新挂载）。"""
+        duckdb_conn.close(self._path, alias="kb")
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:

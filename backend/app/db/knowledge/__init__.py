@@ -25,12 +25,18 @@ def get_kb_config() -> dict:
 
     ``app.config`` 在此惰性导入，使 import ``app.db.knowledge.store`` 跑 DuckDB 单测时
     不触发配置加载（无 torch / 无 pyyaml 亦可）。
+
+    评审 B1（存储收口）：``kb.path`` 未显式配置时**落 03 主库**（``db.sqlite_path``，
+    默认 ``./agentar.db``），不再另开 ``kb/knowledge.db`` 分叉库；语料源目录由
+    ``kb.corpus_dir`` 独立指定（默认 ``./kb``），不再从库文件路径反推。
     """
     from app.config import config
 
     kb = dict(config.get("kb") or {})
     kb.setdefault("engine", "duckdb")
-    kb.setdefault("path", "./kb/knowledge.db")
+    main_db = (config.get("db") or {}).get("sqlite_path") or "./agentar.db"
+    kb.setdefault("path", main_db)
+    kb.setdefault("corpus_dir", "./kb")
     kb.setdefault("embed_dim", 0)
     kb.setdefault("use_vss", False)
     chunk = dict(kb.get("chunk") or {})
@@ -52,7 +58,8 @@ def get_knowledge_store():
     kb = get_kb_config()
     engine = kb["engine"]
     path = kb["path"]
-    kb_dir = os.path.dirname(os.path.abspath(path))
+    # 语料目录与库文件解耦：库已收口到主库 agentar.db，语料仍在 backend/kb/
+    kb_dir = os.path.abspath(kb["corpus_dir"])
     if engine == "sqlite":
         from app.db.knowledge.sqlite_store import SQLiteKnowledgeStore
 
@@ -78,8 +85,17 @@ def reset_knowledge_store() -> None:
 
 
 # —— 便捷函数（02 run() 经此取片段，向后兼容 04 retrieve 签名） —— #
-def retrieve(query: str, top_k: int = 3) -> list[Passage]:
-    return get_knowledge_store().retrieve(query, top_k=top_k)
+def retrieve(
+    query: str,
+    top_k: int = 3,
+    *,
+    user_id: Optional[int] = None,
+    use_personal_docs: bool = False,
+) -> list[Passage]:
+    """检索片段；给定 ``user_id`` 且 ``use_personal_docs=True`` 时并入该用户个人文档。"""
+    return get_knowledge_store().retrieve(
+        query, top_k=top_k, user_id=user_id, use_personal_docs=use_personal_docs
+    )
 
 
 def ingest_text(text: str, **meta) -> int:
