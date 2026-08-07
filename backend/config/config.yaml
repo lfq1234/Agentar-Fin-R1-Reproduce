@@ -104,7 +104,7 @@ kb:
 # personal_doc_chunk_embeddings 全部落 db.sqlite_path 主库，不另开文件。
 personal_docs:
   enabled: true
-  max_file_mb: 10             # 单文件大小上限，超限记 status=error（不抛 500）
+  max_file_mb: 20             # 单文件大小上限，超限记 status=error（不抛 500）
   chunk:
     max_chars: 600
     overlap: 80

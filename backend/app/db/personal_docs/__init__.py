@@ -20,7 +20,7 @@ def get_personal_docs_config() -> dict:
 
     cfg = dict(config.get("personal_docs") or {})
     cfg.setdefault("enabled", True)
-    cfg.setdefault("max_file_mb", 10)
+    cfg.setdefault("max_file_mb", 20)
     cfg.setdefault("embed_dim", 0)
     chunk = dict(cfg.get("chunk") or {})
     chunk.setdefault("max_chars", 600)
