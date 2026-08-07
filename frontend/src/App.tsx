@@ -9,7 +9,6 @@ import { ChatInput } from "./components/ChatInput";
 import { AnalyzePanel } from "./components/AnalyzePanel";
 import { ErrorModal } from "./components/ErrorModal";
 import { PersonalDocsPanel } from "./components/PersonalDocsPanel";
-import { SceneSelect } from "./components/SceneSelect";
 import { LoginPage } from "./components/LoginPage";
 
 const STATUS_TEXT: Record<string, string> = {
@@ -19,15 +18,11 @@ const STATUS_TEXT: Record<string, string> = {
 };
 
 function LeftToolbar({
-  scene,
-  onSceneChange,
   onNewSession,
   onAnalyze,
   canAnalyze,
   backendStatus,
 }: {
-  scene: Parameters<typeof SceneSelect>[0]["value"];
-  onSceneChange: (v: Parameters<typeof SceneSelect>[0]["value"]) => void;
   onNewSession: () => void;
   onAnalyze: () => void;
   canAnalyze: boolean;
@@ -35,11 +30,6 @@ function LeftToolbar({
 }) {
   return (
     <aside className="chat-leftbar">
-      <div className="leftbar-group">
-        <label className="leftbar-label">场景</label>
-        <SceneSelect value={scene} onChange={onSceneChange} />
-      </div>
-
       <div className="leftbar-group">
         <label className="leftbar-label">操作</label>
         <button className="leftbar-btn" onClick={onAnalyze} disabled={!canAnalyze} title="分析最近一条助手回复">
@@ -108,8 +98,6 @@ export function App() {
     sidebarOpen,
     toggleSidebar,
     history,
-    scene,
-    setScene,
     lastAssistant,
     message,
     setMessage,
@@ -199,7 +187,6 @@ export function App() {
                 loading={loading}
               />
               <div className="hero-footer">
-                <SceneSelect value={scene} onChange={setScene} />
                 <span className={`status-dot ${backendStatus}`}>{STATUS_TEXT[backendStatus]}</span>
               </div>
             </div>
@@ -209,8 +196,6 @@ export function App() {
             <Header onToggleSidebar={toggleSidebar} backendStatus={backendStatus} />
 
             <LeftToolbar
-              scene={scene}
-              onSceneChange={setScene}
               onNewSession={createSession}
               onAnalyze={runAnalyze}
               canAnalyze={!!lastAssistant}

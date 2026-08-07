@@ -6,11 +6,11 @@ import type {
   BackendStatus,
   ChatRequest,
   ChatSession,
-  SceneOption,
   UiMessage,
 } from "../types/agent";
 
 // 09：user_id 由后端从 JWT 令牌解析，前端不再携带（数据隔离）。
+// 智能体/场景选择：前端不再传入 scene——由后端多智能体框架（Coordinator 路由 + 专家互询/圆桌）决定谁来回答。
 
 // 会话 ID 生成：优先 crypto.randomUUID（需安全上下文），否则降级（评审 S2）。
 function genId(): string {
@@ -20,14 +20,13 @@ function genId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function createBlankSession(scene: SceneOption = "Banking"): ChatSession {
+function createBlankSession(): ChatSession {
   const now = Date.now();
   return {
     id: genId(),
     title: "新对话",
     history: [],
     conversationId: null,
-    scene,
     createdAt: now,
     updatedAt: now,
   };
@@ -97,7 +96,6 @@ export function useChat() {
 
     const req: ChatRequest = {
       message: text,
-      ...(currentSession.scene !== "Auto" ? { scene: currentSession.scene } : {}),
       // 已有 conversationId 则携带，复用后端会话上下文（M4）
       ...(currentSession.conversationId ? { conversation_id: currentSession.conversationId } : {}),
     };
@@ -146,7 +144,6 @@ export function useChat() {
     setError(null);
     const req: AnalyzeRequest = {
       message: text,
-      ...(currentSession.scene !== "Auto" ? { scene: currentSession.scene } : {}),
     };
     try {
       const res = await analyze(req);
@@ -160,12 +157,12 @@ export function useChat() {
 
   // 新建会话：激活并关闭个人文档 / 收起移动端侧边栏。
   const createSession = useCallback(() => {
-    const ns = createBlankSession(currentSession?.scene ?? "Banking");
+    const ns = createBlankSession();
     setSessions((prev) => [...prev, ns]);
     setCurrentSessionId(ns.id);
     setPersonalDocsOpen(false);
     setSidebarOpen(false);
-  }, [currentSession?.scene]);
+  }, []);
 
   // 删除会话：删当前则切到 updatedAt 最新的；无会话则自动新建空白。
   const deleteSession = useCallback(
@@ -195,21 +192,10 @@ export function useChat() {
     setSidebarOpen(false);
   }, []);
 
-  // 场景双向绑定：修改当前会话的 scene（评审 N5）。
-  const setScene = useCallback(
-    (v: SceneOption) => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === currentSessionId ? { ...s, scene: v, updatedAt: Date.now() } : s)),
-      );
-    },
-    [currentSessionId],
-  );
-
   const togglePersonalDocs = useCallback(() => setPersonalDocsOpen((v) => !v), []);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
 
   const history = currentSession?.history ?? [];
-  const scene = currentSession?.scene ?? "Banking";
   const lastAssistant = history.length
     ? ([...history].reverse().find((m) => m.role === "assistant") ?? null)
     : null;
@@ -227,8 +213,6 @@ export function useChat() {
     toggleSidebar,
     // —— 当前会话视图 ——
     history,
-    scene,
-    setScene,
     lastAssistant,
     // —— 输入与全局状态 ——
     message,

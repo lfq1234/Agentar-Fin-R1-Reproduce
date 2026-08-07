@@ -106,18 +106,6 @@ body {
   align-items: center;
   gap: 12px;
 }
-.scene-select {
-  font-size: 14px;
-  color: var(--muted);
-}
-.scene-select select {
-  margin-left: 4px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
-}
 
 /* Buttons */
 .btn {

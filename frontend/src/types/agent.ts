@@ -1,23 +1,14 @@
 // 后端契约镜像（与 backend/app/routes/chat.py 对齐，已核对源码）。
-
-export type Scene = "Banking" | "Securities" | "Insurance" | "Trust" | "MutualFunds";
-
-export const SCENES: Scene[] = ["Banking", "Securities", "Insurance", "Trust", "MutualFunds"];
-
-// 前端下拉选项：Auto = 不传 scene，触发后端 Coordinator 路由（G3 默认场景决策）。
-export type SceneOption = Scene | "Auto";
-
-export const SCENE_OPTIONS: SceneOption[] = ["Auto", ...SCENES];
+// 注意：前端不再选择智能体/场景——由后端多智能体框架（Coordinator 路由 + 专家通讯）决定谁来回答。
+// 因此请求体不再携带 scene，交给后端自动路由（system.py:184）。
 
 export interface ChatRequest {
   message: string;
-  scene?: Scene; // 省略时后端按默认 / Coordinator 路由处理
   // 09：user_id 不再由前端传，改由后端从 JWT 令牌解析（数据隔离）。
   conversation_id?: number;
 }
 
 export interface ChatResponse {
-  scene?: Scene;
   conversation_id?: number | null;
   reply: string;
   compliance_notes: string[];
@@ -26,11 +17,9 @@ export interface ChatResponse {
 
 export interface AnalyzeRequest {
   message: string;
-  scene?: Scene;
 }
 
 export interface AnalyzeResponse {
-  scene?: Scene;
   intent?: string | null;
   slots: Record<string, string>;
   tool_plan: string[];
@@ -53,7 +42,6 @@ export interface ChatSession {
   title: string;
   history: UiMessage[];
   conversationId: number | null;
-  scene: SceneOption;
   createdAt: number;
   updatedAt: number;
 }
