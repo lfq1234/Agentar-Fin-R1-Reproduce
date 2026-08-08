@@ -21,13 +21,41 @@ export function isCoreType(type: string): boolean {
   return CORE_TYPES.has(type.toLowerCase());
 }
 
-// 节点着色：核心实体橙、地域/属性绿、其余灰（需求 §FR4 / 技术 §6.1）。
+// 节点着色：与 backend/08 实体类型对齐（Document / Person / Education / Company /
+// Skill / Org / Product / Clause / Metric / Concept），让不同实体一眼可区分。
 export function nodeColor(type: string): string {
   const t = type.toLowerCase();
-  if (isCoreType(t)) return "#f59e0b";
-  if (t === "region" || t === "location" || t === "area" || t === "attribute" || t === "value")
-    return "#22c55e";
-  return "#6b7280";
+  switch (t) {
+    case "document":
+      return "#6366f1"; // indigo
+    case "person":
+      return "#f59e0b"; // amber
+    case "education":
+      return "#22c55e"; // green
+    case "company":
+      return "#3b82f6"; // blue
+    case "skill":
+      return "#8b5cf6"; // purple
+    case "org":
+    case "organization":
+    case "product":
+    case "fund":
+    case "bank":
+    case "enterprise":
+      return "#f97316"; // orange
+    case "clause":
+      return "#06b6d4"; // cyan
+    case "metric":
+      return "#14b8a6"; // teal
+    case "region":
+    case "location":
+    case "area":
+    case "attribute":
+    case "value":
+      return "#22c55e"; // green
+    default:
+      return "#6b7280"; // gray
+  }
 }
 
 export function nodeRadius(type: string): number {

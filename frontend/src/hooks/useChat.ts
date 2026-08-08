@@ -114,9 +114,11 @@ export function formatRelativeTime(ts: number): string {
 }
 
 export function useChat() {
-  // 会话集合（评审：单会话 → 集合）。初始一个空白会话。
-  const [sessions, setSessions] = useState<ChatSession[]>(() => [createBlankSession()]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => sessions[0]?.id ?? "");
+  // 会话集合（评审：单会话 → 集合）。初始不预建空白——避免侧边栏出现
+  // 「本地占位 + 后端真会话」的重复条目；启动后从后端拉取历史，若无再
+  // 补一个空白。这样列表里的可见项总是有意义的（真历史 / 当前正在编辑的草稿）。
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const [personalDocsOpen, setPersonalDocsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // 移动端侧边栏显隐（评审 M3）
 
@@ -236,11 +238,20 @@ export function useChat() {
     }
   }, [analyzing, currentSession]);
 
-  // 07：登录后从后端拉取历史会话列表；空列表时保留初始空白会话。
+  // 07：登录后从后端拉取历史会话列表；空列表时补一个空白让用户能立刻开聊。
   const loadSessions = useCallback(async () => {
     try {
       const metas = await listSessions();
-      if (metas.length === 0) return;
+      if (metas.length === 0) {
+        // 后端无历史：补一个本地空白，并把当前会话切到它。
+        setSessions((prev) => {
+          if (prev.length > 0) return prev;
+          const ns = createBlankSession();
+          setCurrentSessionId(ns.id);
+          return [ns];
+        });
+        return;
+      }
       const loaded = metas.map(metaToSession);
       setSessions(loaded);
       setCurrentSessionId(loaded[0].id);
@@ -248,6 +259,13 @@ export function useChat() {
       // 历史加载失败不阻断主链路，仅静默降级（避免一启动就弹错误）。
       // eslint-disable-next-line no-console
       console.warn("加载历史会话失败", e);
+      // 拉取失败也保证有可用空白会话，避免侧边栏空白 / 无法输入。
+      setSessions((prev) => {
+        if (prev.length > 0) return prev;
+        const ns = createBlankSession();
+        setCurrentSessionId(ns.id);
+        return [ns];
+      });
     }
   }, []);
 

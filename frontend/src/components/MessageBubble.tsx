@@ -3,8 +3,13 @@ import { AGENT_DISPLAY } from "../types/agent";
 import { ComplianceRisk } from "./ComplianceRisk";
 
 // 后端 agent 字段是 AgentScope 名字键（如 "BankingExpert"），前端按名字从
-// AGENT_DISPLAY 映射出中文名 + 头像 + 主题色。未知键名兜底，不让用户看到 raw key。
-function agentDisplay(key: string | undefined): {
+// AGENT_DISPLAY 映射出中文名 + 头像 + 主题色。
+//   - 已知键：原样映射
+//   - 未知但非空键：原样显示（便于调试），灰色
+//   - 空键（DB 中旧消息 / Direct 通道旧 01 通道遗留）：按 role 兜底——
+//     assistant → Direct（蓝色 Agentar），agent → Coordinator（靛色协调者），
+//     这样历史消息也能一眼看出"是谁答的 / 是哪种智能体"，不再千篇一律的"智能体"。
+function agentDisplay(key: string | undefined, role?: "user" | "assistant" | "agent"): {
   key: string;
   name: string;
   avatar: string;
@@ -13,7 +18,11 @@ function agentDisplay(key: string | undefined): {
   const k = key ?? "";
   const m = AGENT_DISPLAY[k];
   if (m) return { key: k, name: m.name, avatar: m.avatar, color: m.color };
-  return { key: k, name: k || "智能体", avatar: "🤖", color: "#64748b" };
+  if (k) return { key: k, name: k, avatar: "🤖", color: "#64748b" };
+  // 空键兜底
+  const fallback = role === "agent" ? "Coordinator" : "Direct";
+  const fb = AGENT_DISPLAY[fallback];
+  return { key: fallback, name: fb.name, avatar: fb.avatar, color: fb.color };
 }
 
 export function MessageBubble({ msg }: { msg: UiMessage }) {
@@ -21,7 +30,7 @@ export function MessageBubble({ msg }: { msg: UiMessage }) {
   const isAgent = msg.role === "agent";
 
   if (isAgent) {
-    const a = agentDisplay(msg.agent);
+    const a = agentDisplay(msg.agent, "agent");
     return (
       <div className="bubble-row agent">
         <div className="agent-avatar" title={a.name} style={{ background: a.color }}>
@@ -40,7 +49,7 @@ export function MessageBubble({ msg }: { msg: UiMessage }) {
 
   // assistant / 最终回复：头部显式标注「谁综合作答」（头像 + 名字 + 主题色），
   // 直接回应「看不到哪个智能体回答」的诉求——Direct 单答也一眼可见。
-  const speaker = agentDisplay(msg.agent);
+  const speaker = agentDisplay(msg.agent, "assistant");
   // 本轮参与者（从 res.agent_trace 抽取；Direct 退化为 ["Agentar"]），去重保序。
   const participants = (msg.participants ?? [])
     .map((k) => agentDisplay(k))
