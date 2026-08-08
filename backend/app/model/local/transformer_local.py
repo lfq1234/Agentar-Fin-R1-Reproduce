@@ -57,12 +57,15 @@ class LocalTransformerModel(ModelInterface):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
             tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+            # 先完整加载到 CPU 内存，再整体迁移到目标设备；避免 device_map="cuda"
+            # 触发 accelerate 把权重放到 meta device 而产生 "Cannot copy out of
+            # meta tensor" 错误。
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 local_files_only=True,
                 dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map=device,
             )
+            model.to(device)
         except Exception as exc:  # 路径不存在 / 权重损坏等
             raise ModelInvokeError(
                 f"LocalTransformerModel 加载权重失败（path={model_path}）: {exc}"
