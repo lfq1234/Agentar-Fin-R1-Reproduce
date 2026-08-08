@@ -31,5 +31,5 @@ if [ -n "${RAW_DATA:-}" ]; then
 fi
 
 # ---- Phase 2: SFT 训练 ----
-echo "[train_sft.sh] Phase 2: SFT 训练  data=$SFT_DATA  model=${MODEL_PATH:-./Qwen3.5-9B}"
+echo "[train_sft.sh] Phase 2: SFT 训练  data=${SFT_DATA:-./data/verl/sft.parquet}  model=${MODEL_PATH:-./Qwen3.5-9B}"
 python "$SCRIPT_DIR/train_sft.py"

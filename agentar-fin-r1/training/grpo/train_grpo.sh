@@ -56,6 +56,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     data.train_files=${GRPO_DATA} \
     data.val_files=${GRPO_DATA} \
+    data.messages_key=messages \
     data.train_batch_size=64 \
     data.max_prompt_length=2048 \
     data.max_response_length=2048 \
