@@ -51,9 +51,17 @@ async def store():
     )
     await s.connect()
     await s.init_tables()
-    storemod._STORE = s  # 让 hooks 内的 get_history_store() 拿到本测试实例
+    # 让 record_run 的兜底 INSERT 能满足 conversations.user_id 外键
+    for uid in (1, 2):
+        await s._conn.execute(
+            "INSERT OR IGNORE INTO users (id, username, created_at, updated_at) "
+            "VALUES (?, ?, '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')",
+            (uid, f"u{uid}"),
+        )
+    await s._conn.commit()
+    storemod._store = s  # 让 hooks 内的 get_history_store() 拿到本测试实例
     yield s
-    storemod._STORE = None
+    storemod._store = None
     await s.close()
 
 
@@ -71,16 +79,16 @@ async def test_traced_chat_records_and_returns_resp(store, monkeypatch):
     monkeypatch.setattr(chat_service_mod, "chat", _original_chat)
     traced = hooks.install_history_tracing()
 
-    req = _Req(user_id="u1", message="请解释GDP", scene="qa")
+    req = _Req(user_id=1, message="请解释GDP", scene="qa")
     resp = await traced(req, None)
 
     # 主链路返回原 resp，不被阻断
     assert resp.reply == "这是助手的回答"
-    # 历史已记录
-    detail = await store.get_session("u1", "42")
+    # 历史已记录：兜底路径会补一条 assistant 消息并把 trace 挂上
+    detail = await store.get_session(1, "42")
     assert detail is not None
     roles = {m["role"] for m in detail.messages}
-    assert roles >= {"user", "assistant"}
+    assert "assistant" in roles
     assert any(e["type"] == "review" for e in detail.trace[0]["events"])
 
 
@@ -89,12 +97,12 @@ async def test_traced_chat_scene_from_request(store, monkeypatch):
     # 回归：scene 必须来自 req（ChatResponse 无 scene 字段），且不能抛 AttributeError
     monkeypatch.setattr(chat_service_mod, "chat", _original_chat)
     traced = hooks.install_history_tracing()
-    req = _Req(user_id="u1", message="hi", scene="invest")
+    req = _Req(user_id=1, message="hi", scene="invest")
     resp = await traced(req, None)
     assert resp.reply == "这是助手的回答"
-    meta = await store._get_meta("42")
-    assert meta is not None
-    assert meta.scene == "invest"
+    detail = await store.get_session(1, "42")
+    assert detail is not None
+    assert detail.meta.scene == "invest"
 
 
 @pytest.mark.asyncio
@@ -104,11 +112,11 @@ async def test_traced_chat_skips_when_no_conversation(store, monkeypatch):
 
     monkeypatch.setattr(chat_service_mod, "chat", _no_conv)
     traced = hooks.install_history_tracing()
-    req = _Req(user_id="u1", message="hi", scene="qa")
+    req = _Req(user_id=1, message="hi", scene="qa")
     resp = await traced(req, None)
     assert resp.conversation_id is None
     # 不应有任何记录
-    assert await store.get_session("u1", "None") is None
+    assert await store.get_session(1, "None") is None
 
 
 @pytest.mark.asyncio
@@ -124,13 +132,20 @@ async def test_traced_chat_async_write_schedules_task(store, monkeypatch):
     )
     await s2.connect()
     await s2.init_tables()
-    storemod._STORE = s2
+    await s2._conn.execute(
+        "INSERT OR IGNORE INTO users (id, username, created_at, updated_at) "
+        "VALUES (?, ?, '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')",
+        (2, "u2"),
+    )
+    await s2._conn.commit()
+    storemod._store = s2
     traced = hooks.install_history_tracing()
-    req = _Req(user_id="u2", message="异步写入测试", scene="qa")
+    req = _Req(user_id=2, message="异步写入测试", scene="qa")
     resp = await traced(req, None)
     # 让后台写任务跑完
     await asyncio.sleep(0.05)
-    detail = await s2.get_session("u2", "42")
+    detail = await s2.get_session(2, "42")
     assert detail is not None
-    assert "异步写入测试" in detail.messages[0]["content"]
+    # 兜底写入的是助手消息（含 trace），其内容即 _original_chat 的 reply
+    assert "这是助手的回答" in detail.messages[0]["content"]
     await s2.close()  # 关闭本测试自建的 store，避免连接泄漏导致的事件循环关闭告警

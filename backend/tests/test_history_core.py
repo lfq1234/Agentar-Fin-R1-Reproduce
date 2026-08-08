@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -42,7 +43,7 @@ def _new_store(tmp, **kw):
         record_traces=True,
         fail_mode="silent",
         allow_admin_all=True,
-        admin_user_ids=["admin1"],
+        admin_user_ids=[999],
         **kw,
     )
     return s
@@ -54,19 +55,44 @@ async def store():
     s = _new_store(tmp)
     await s.connect()
     await s.init_tables()
+    # 测试直接用整数 user_id，需先建 users 行以满足 conversations.user_id 外键
+    for uid in (1, 2, 999):
+        await s._conn.execute(
+            "INSERT OR IGNORE INTO users (id, username, created_at, updated_at) "
+            "VALUES (?, ?, '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')",
+            (uid, f"u{uid}"),
+        )
+    await s._conn.commit()
     yield s
     await s.close()
 
 
-def _do_record(s, conv, user, *, reply="答案是42", note="合规OK", msg="什么是GDP"):
+async def _do_record(s, conv, user, *, reply="答案是42", note="合规OK", msg="什么是GDP"):
     result = FakeResult(reply=reply, compliance_notes=[note], risk_flags=[])
     events = collect.build_events(result, user_message=msg)
-    return s.record_run(
+    # 模拟 chat.py 的落库顺序：先把 user + assistant 消息写入 conversations.data，
+    # 再由 record_run 把 trace 挂到匹配回复内容的助手消息上（单表收口后的真实流程）。
+    # 约定：行级 created_at/updated_at 为 ISO TEXT；消息级 created_at 为 epoch 毫秒整数。
+    ts_iso = datetime.now(timezone.utc).isoformat()
+    ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    seeded = {
+        "messages": [
+            {"role": "user", "content": msg, "scene": "qa", "created_at": ts_ms},
+            {"role": "assistant", "content": reply, "scene": "qa", "created_at": ts_ms},
+        ]
+    }
+    await s._conn.execute(
+        "INSERT OR IGNORE INTO conversations (id, user_id, scene, title, created_at, updated_at, data) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (str(conv), str(user), "qa", reply[:50], ts_iso, ts_iso, json.dumps(seeded, ensure_ascii=False)),
+    )
+    await s._conn.commit()
+    return await s.record_run(
         conversation_id=conv,
         user_id=user,
         scene="qa",
-        run_id="run-" + conv,
-        turn_id="turn-" + conv,
+        run_id="run-" + str(conv),
+        turn_id="turn-" + str(conv),
         duration_ms=123,
         model="test-model",
         result=result,
@@ -138,8 +164,8 @@ def test_collect_extra_events_from_agent_trace():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_record_and_get_session(store):
-    await _do_record(store, "conv-1", "userA")
-    detail = await store.get_session("userA", "conv-1")
+    await _do_record(store, 1, 1)
+    detail = await store.get_session(1, 1)
     assert detail is not None
     assert detail.has_trace is True
     assert detail.meta is not None
@@ -155,19 +181,19 @@ async def test_record_expert_events_and_replay(store):
     extra = [M.TraceEvent(agent="Banking", type="expert_opinion", summary_out="这是Banking领域答案")]
     events = collect.build_events(res, user_message="买基金", extra_events=extra)
     await store.record_run(
-        conversation_id="conv-x", user_id="userA", scene="Banking",
+        conversation_id=3, user_id=1, scene="Banking",
         run_id="run-x", turn_id="turn-x", duration_ms=50, model="m",
         result=res, events=events, user_message="买基金", total_tokens=5,
     )
-    detail = await store.get_session("userA", "conv-x")
+    detail = await store.get_session(1, 3)
     flat = [n for run in detail.trace for n, _ in exportmod._iter_event_nodes(run["events"])]
     assert any(n.get("type") == "expert_opinion" for n in flat)
 
 
 @pytest.mark.asyncio
 async def test_get_turn(store):
-    await _do_record(store, "conv-1", "userA")
-    turn = await store.get_turn("userA", "conv-1", "turn-conv-1")
+    await _do_record(store, 1, 1)
+    turn = await store.get_turn(1, 1, "turn-1")
     assert turn is not None
     assert turn.user_message == "什么是GDP"
     assert "答案是42" in turn.assistant_reply
@@ -177,8 +203,8 @@ async def test_get_turn(store):
 @pytest.mark.asyncio
 async def test_record_traces_false_safe_degrade(store):
     await store.record_run(
-        conversation_id="conv-2",
-        user_id="userA",
+        conversation_id=2,
+        user_id=1,
         scene="qa",
         run_id="run-conv-2",
         turn_id="turn-conv-2",
@@ -188,7 +214,7 @@ async def test_record_traces_false_safe_degrade(store):
         events=[],
         user_message="hi",
     )
-    detail = await store.get_session("userA", "conv-2")
+    detail = await store.get_session(1, 2)
     # record_traces=true 时仍有 session_traces 头；has_trace 取决于 trace_events 是否有事件
     assert detail is not None
 
@@ -205,32 +231,32 @@ async def test_init_tables_idempotent(store):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_list_sessions_scoping(store):
-    await _do_record(store, "conv-A", "userA")
-    mine = await store.list_sessions("userA")
-    assert any(m.conversation_id == "conv-A" for m in mine)
-    others = await store.list_sessions("userB")
-    assert all(m.conversation_id != "conv-A" for m in others)
-    admin = await store.list_sessions("admin1")
-    assert any(m.conversation_id == "conv-A" for m in admin)
+    await _do_record(store, 11, 1)
+    mine = await store.list_sessions(1)
+    assert any(m.conversation_id == "11" for m in mine)
+    others = await store.list_sessions(2)
+    assert all(m.conversation_id != "11" for m in others)
+    admin = await store.list_sessions(999)
+    assert any(m.conversation_id == "11" for m in admin)
 
 
 @pytest.mark.asyncio
 async def test_get_session_permission_denied(store):
-    await _do_record(store, "conv-A", "userA")
+    await _do_record(store, 11, 1)
     with pytest.raises(M.HistoryAccessError):
-        await store.get_session("userB", "conv-A")
+        await store.get_session(2, 11)
 
 
 @pytest.mark.asyncio
 async def test_delete_own_and_denied(store):
-    await _do_record(store, "conv-A", "userA")
-    n = await store.delete_session("userA", "conv-A")
+    await _do_record(store, 11, 1)
+    n = await store.delete_session(1, 11)
     assert n == 1
-    assert await store.get_session("userA", "conv-A") is None
+    assert await store.get_session(1, 11) is None
     # 重新写一条，他人删除应被拒
-    await _do_record(store, "conv-B", "userA")
+    await _do_record(store, 12, 1)
     with pytest.raises(M.HistoryAccessError):
-        await store.delete_session("userB", "conv-B")
+        await store.delete_session(2, 12)
 
 
 # ---------------------------------------------------------------------------
@@ -238,19 +264,19 @@ async def test_delete_own_and_denied(store):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_keyword_search_scoping_and_time(store):
-    await _do_record(store, "conv-A", "userA", msg="查询GDP增长率")
+    await _do_record(store, 11, 1, msg="查询GDP增长率")
     # 本人命中
-    hits = await store.keyword_search("userA", "GDP")
-    assert any(h.conversation_id == "conv-A" for h in hits)
+    hits = await store.keyword_search(1, "GDP")
+    assert any(h.conversation_id == "11" for h in hits)
     # 他人无命中（非管理员）
-    hits_other = await store.keyword_search("userB", "GDP")
-    assert not any(h.conversation_id == "conv-A" for h in hits_other)
+    hits_other = await store.keyword_search(2, "GDP")
+    assert not any(h.conversation_id == "11" for h in hits_other)
     # 管理员可见
-    hits_admin = await store.keyword_search("admin1", "GDP")
-    assert any(h.conversation_id == "conv-A" for h in hits_admin)
+    hits_admin = await store.keyword_search(999, "GDP")
+    assert any(h.conversation_id == "11" for h in hits_admin)
     # 时间过滤：start=未来 → 无命中
     future = 9_999_999_999_999_999
-    hits_future = await store.keyword_search("userA", "GDP", start=future)
+    hits_future = await store.keyword_search(1, "GDP", start=future)
     assert hits_future == []
 
 
@@ -259,38 +285,40 @@ async def test_keyword_search_scoping_and_time(store):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_purge_before_admin_only_and_time(store):
-    await _do_record(store, "conv-OLD", "userA")
-    # 把 OLD 的 created_at 改到 10 天前
-    old_ts = 1_600_000_000_000  # 固定过去时间戳
+    await _do_record(store, 21, 1)
+    old_ts = 1_600_000_000_000  # 固定过去时间戳（2020-09）
+    # 把 OLD 的 updated_at 改到 2020（早于 purge_before 的 before 边界）
     await store._conn.execute(
-        "UPDATE session_traces SET created_at=? WHERE conversation_id=?",
-        (old_ts, "conv-OLD"),
-    )
-    await store._conn.execute(
-        "UPDATE session_meta SET first_at=?, last_at=? WHERE conversation_id=?",
-        (old_ts, old_ts, "conv-OLD"),
+        "UPDATE conversations SET updated_at=? WHERE id=?",
+        ("2020-01-01T00:00:00+00:00", 21),
     )
     await store._conn.commit()
-    await _do_record(store, "conv-NEW", "userA")
+    await _do_record(store, 22, 1)
 
     # 非管理员调用 purge_before 应拒绝
     with pytest.raises(M.HistoryAccessError):
-        await store.purge_before("userB", old_ts + 1)
+        await store.purge_before(2, old_ts + 1)
 
     # 管理员清理 old_ts 之前 → 仅清 OLD，保留 NEW
-    n = await store.purge_before("admin1", old_ts + 1)
+    n = await store.purge_before(999, old_ts + 1)
     assert n == 1
-    assert await store.get_session("userA", "conv-OLD") is None
-    assert await store.get_session("userA", "conv-NEW") is not None
+    assert await store.get_session(1, 21) is None
+    assert await store.get_session(1, 22) is not None
 
 
 @pytest.mark.asyncio
 async def test_retention_apply(store):
-    # retention_days=0 → before=now → 清理所有（created_at<now）
-    await _do_record(store, "conv-X", "userA")
-    n = await retentionmod.apply_retention(store, requester_id="admin1", retention_days=0)
+    # retention_days=0 → before=now → 清理所有（updated_at < now）
+    await _do_record(store, 4, 1)
+    # 把 updated_at 改到过去，避免与 before=now 落在同一毫秒导致边界比较歧义
+    await store._conn.execute(
+        "UPDATE conversations SET updated_at=? WHERE id=?",
+        ("2020-01-01T00:00:00+00:00", 4),
+    )
+    await store._conn.commit()
+    n = await retentionmod.apply_retention(store, requester_id=999, retention_days=0)
     assert n == 1
-    assert await store.get_session("userA", "conv-X") is None
+    assert await store.get_session(1, 4) is None
 
 
 # ---------------------------------------------------------------------------
@@ -298,14 +326,14 @@ async def test_retention_apply(store):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_export_md_and_json(store):
-    await _do_record(store, "conv-1", "userA")
-    md = await store.export_session("userA", "conv-1", fmt="md")
+    await _do_record(store, 1, 1)
+    md = await store.export_session(1, 1, fmt="md")
     assert "会话复盘文档" in md
     assert "什么是GDP" in md
-    js = await store.export_session("userA", "conv-1", fmt="json")
+    js = await store.export_session(1, 1, fmt="json")
     parsed = json.loads(js)
-    assert parsed["conversation_id"] == "conv-1"
-    ctx = await store.get_session_for_review("userA", "conv-1")
+    assert parsed["conversation_id"] == "1"
+    ctx = await store.get_session_for_review(1, 1)
     assert "会话复盘上下文" in ctx
     assert "合规OK" in ctx
 
@@ -317,7 +345,7 @@ async def test_export_md_and_json(store):
 async def test_fail_mode_local_writes_fallback(tmp_path):
     db = str(tmp_path / "history.db")
     s = storemod.SessionHistoryStore(
-        db, fail_mode="local", admin_user_ids=["admin1"]
+        db, fail_mode="local", admin_user_ids=[999]
     )
     await s.connect()
     await s.init_tables()

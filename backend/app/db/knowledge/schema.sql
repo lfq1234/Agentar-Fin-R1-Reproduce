@@ -1,4 +1,0 @@
--- 本文件已迁移：06 知识库 DDL 统一收口至 app/db/schema/duckdb/knowledge.sql
--- （chunks / kb_meta，DuckDB 引擎作用于 SQLite 文件）。
--- 实际建表以 app/db/schema/duckdb/knowledge.sql 为准；
--- app/db/knowledge/sqlite_store.py 与 store.py 均读取该文件，不再内联。

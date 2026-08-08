@@ -14,7 +14,6 @@ from app.db.models.conversation import (
 from app.db.models.message import (
     AnalyzeRequest,
     AnalyzeResponse,
-    Message,
     MessageBase,
 )
 from app.db.models.user import User, UserCreate, UserPublic, UserRegister
@@ -30,7 +29,6 @@ __all__ = [
     "UserRegister",
     "Conversation",
     "ConversationBase",
-    "Message",
     "MessageBase",
     "ChatRequest",
     "ChatResponse",

@@ -1,22 +1,18 @@
-"""07-历史检索：关键词检索（LIKE / 可选 FTS5）与可选语义检索（委托 06 embedder）。
+"""07-检索：关键词检索（在 conversations.data 上 LIKE）+ 语义检索（未启用）。
 
-实现放在独立模块，由 ``store.SessionHistoryStore`` 的对应方法委托调用（保持职责分离）。
-- keyword_search：在 trace_events.summary_in/out/meta_json 与 session_traces.final_result 上
-  做 LIKE 匹配，带 user_id/scene/时间过滤（时间基于 INTEGER epoch 毫秒，评审 B4）。
-- semantic_search：默认关；开启时复用 06 的 get_embedder() 向量化，07 自有 history_embeddings
-  做 Python 余弦召回（评审 S5：07 拥有 embeddings，不引入 DuckDB ATTACH 分叉）。
+语义检索依赖 history_embeddings（原表已废弃、单表收口后不再维护），
+故 semantic_search 直接降级返回空列表。
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Optional
 
-from app.db.history.models import HistoryAccessError, SearchHit
-from app.db.history.store import _to_epoch_ms
+from app.db.history.models import SearchHit
 
 
 async def keyword_search(
-    store,
+    store: Any,
     requester_id: str,
     query: str,
     *,
@@ -25,108 +21,63 @@ async def keyword_search(
     end: Optional[Any] = None,
     limit: int = 20,
 ) -> list[SearchHit]:
-    if not store.enabled or not query:
-        return []
+    """在 conversations.data(JSON) 的消息正文中做关键词匹配，按时间倒序返回命中。"""
     requester_id = str(requester_id)
     admin = store._is_admin(requester_id)
-    like = f"%{query}%"
-    sql = (
-        "SELECT te.id, te.run_id, te.turn_id, te.type, te.summary_in, te.summary_out, "
-        "te.meta_json, te.created_at, st.conversation_id, st.user_id "
-        "FROM trace_events te JOIN session_traces st ON te.run_id = st.run_id "
-        "WHERE (te.summary_in LIKE ? OR te.summary_out LIKE ? OR te.meta_json LIKE ? "
-        "OR st.final_result LIKE ?)"
-    )
-    params: list = [like, like, like, like]
+
+    sql = "SELECT * FROM conversations"
+    conds: list[str] = []
+    params: list = []
     if not admin:
-        sql += " AND st.user_id = ?"
+        conds.append("CAST(user_id AS TEXT) = ?")
         params.append(requester_id)
     if scene:
-        sql += " AND st.scene = ?"
+        conds.append("scene = ?")
         params.append(scene)
-    s_ms = _to_epoch_ms(start)
-    e_ms = _to_epoch_ms(end)
-    if s_ms is not None:
-        sql += " AND st.created_at >= ?"
-        params.append(s_ms)
-    if e_ms is not None:
-        sql += " AND st.created_at <= ?"
-        params.append(e_ms)
-    sql += " ORDER BY st.created_at DESC LIMIT ?"
-    params.append(limit)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
 
     rows = await store._fetchall(sql, params)
+    q = (query or "").lower()
     hits: list[SearchHit] = []
     for r in rows:
-        snippet_parts = [r["summary_in"] or "", r["summary_out"] or "", r["meta_json"] or ""]
-        snippet = " / ".join(p for p in snippet_parts if p)
-        idx = snippet.find(query)
-        if idx != -1:
-            snippet = snippet[max(0, idx - 30) : idx + len(query) + 30]
-        hits.append(
-            SearchHit(
-                conversation_id=r["conversation_id"],
-                turn_id=r["turn_id"],
-                event_id=r["id"],
-                snippet=snippet,
-                score=1.0,
-                type=r["type"],
-                created_at=r["created_at"],
+        try:
+            data = json.loads(r["data"] or "{}") or {}
+        except Exception:
+            continue
+        for idx, m in enumerate(data.get("messages", [])):
+            content = m.get("content") or ""
+            if q and q not in content.lower():
+                continue
+            # 时间过滤（epoch 毫秒）
+            ca = m.get("created_at") or 0
+            if start is not None and ca < (start if start > 1e11 else start * 1000):
+                continue
+            if end is not None and ca > (end if end > 1e11 else end * 1000):
+                continue
+            turn_id = (m.get("trace") or {}).get("turn_id", "") if m.get("trace") else ""
+            hits.append(
+                SearchHit(
+                    conversation_id=str(r["id"]),
+                    turn_id=turn_id,
+                    event_id=idx,
+                    snippet=content[:200],
+                    score=1.0,
+                    type=m.get("role", ""),
+                    created_at=ca,
+                )
             )
-        )
-    return hits
+
+    hits.sort(key=lambda h: h.created_at, reverse=True)
+    return hits[:limit]
 
 
 async def semantic_search(
-    store,
+    store: Any,
     requester_id: str,
     query: str,
     *,
     top_k: int = 5,
 ) -> list[SearchHit]:
-    if not store.enabled or not store.semantic_search:
-        return []
-    requester_id = str(requester_id)
-    admin = store._is_admin(requester_id)
-    rows = await store._fetchall("SELECT * FROM history_embeddings", [])
-    if not rows:
-        return []
-    try:
-        from app.db.knowledge import get_knowledge_store
-
-        embedder = get_knowledge_store()._get_embedder()
-        qvec = embedder.embed([query])[0]
-    except Exception as exc:
-        store.logger.warning("07 语义检索向量化失败，降级为空: %s", exc)
-        return []
-
-    scored: list[tuple[float, Any]] = []
-    for r in rows:
-        try:
-            vec = json.loads(r["embedding"])
-        except Exception:
-            continue
-        sim = store._cosine(qvec, vec)
-        scored.append((sim, r))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    hits: list[SearchHit] = []
-    for sim, r in scored[:top_k]:
-        if not admin:
-            owner = await store._fetchone(
-                "SELECT DISTINCT user_id FROM session_traces WHERE conversation_id=?",
-                (r["conversation_id"],),
-            )
-            if owner is None or owner["user_id"] != requester_id:
-                continue
-        hits.append(
-            SearchHit(
-                conversation_id=r["conversation_id"],
-                turn_id="",
-                event_id=None,
-                snippet=f"[embedding:{r['model']}]",
-                score=round(sim, 4),
-                type="semantic",
-                created_at=0,
-            )
-        )
-    return hits
+    """语义检索：history_embeddings 已随单表收口废弃，直接降级返回空。"""
+    return []

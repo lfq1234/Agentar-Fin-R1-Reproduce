@@ -86,17 +86,6 @@ class SessionMeta:
     created_at: int = 0
 
 
-@dataclass
-class HistoryEmbedding:
-    """可选语义检索：历史消息向量（开启 history.semantic_search 时启用）。"""
-
-    message_id: str
-    conversation_id: str = ""
-    embedding: str = ""  # JSON 数组
-    dim: int = 0
-    model: str = ""  # embedder 版本（切换 embedder 需重建，评审 S5）
-
-
 # ---------------------------------------------------------------------------
 # 查询/回放返回结构
 # ---------------------------------------------------------------------------
@@ -164,18 +153,7 @@ class HistoryStore(Protocol):
         status: str = "ok",
     ) -> None: ...
 
-    async def upsert_session_meta(
-        self,
-        conversation_id: str,
-        *,
-        scene: Optional[str] = None,
-        title: Optional[str] = None,
-        status: Optional[str] = None,
-        msg_count: int = 0,
-        total_tokens: int = 0,
-        first_at: Optional[int] = None,
-        last_at: Optional[int] = None,
-    ) -> None: ...
+    # upsert_session_meta 已移除：会话元信息不再单列，由 record_run 直接维护。
 
     async def list_sessions(
         self,

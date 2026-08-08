@@ -39,10 +39,11 @@ def install_history_tracing() -> Any:
 
     original = chat_service.chat
 
-    async def traced_chat(req: Any, db: Any):
+    async def traced_chat(req: Any, db: Any, **kwargs: Any):
         store = get_history_store()
         t0 = time.monotonic()
-        resp = await original(req, db)
+        # 透传额外关键字（如 user_id），使路由显式传入的归属信息直达原 chat
+        resp = await original(req, db, **kwargs)
         # 采集逻辑整体包在 try 内：任何异常（含字段缺失）都不阻断主链路
         try:
             # 延迟导入：避免在 import app.db.history 时拉起 agentscope 重依赖

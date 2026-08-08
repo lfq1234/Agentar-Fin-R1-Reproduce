@@ -2,7 +2,7 @@
 
 - db.enabled=false：引擎/会话不构建，get_db 产出 None，系统无库也能启动并响应。
 - db.enabled=true ：按 config.db 构建异步 SQLite 引擎（sqlite+aiosqlite），提供会话依赖。
-- 开发/测试期 init_db() 用 SQLModel.metadata.create_all 建表；生产以 schema.sql 为准。
+- 开发/测试期 init_db() 用 SQLModel.metadata.create_all 建表；生产 DDL 见 app/db/schema/sqlite/main.sql。
 - 异步参考 tiangolo/full-stack-fastapi-template 的 core/db.py，但保留本项目的 enabled 短路设计。
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ if _ENABLED:
 async def init_db() -> None:
     """db.enabled=true 时按 SQLModel 元数据建表（开发/测试期）。
 
-    生产环境以 app/db/schema.sql 的可执行 DDL 为准，部署时执行该脚本建表。
+    生产环境以 app/db/schema/sqlite/main.sql 的可执行 DDL 为准，部署时执行该脚本建表。
     """
     if not _ENABLED or engine is None:
         return

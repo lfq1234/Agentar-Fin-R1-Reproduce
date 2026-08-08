@@ -10,12 +10,13 @@ app/
 ├── routes/chat.py   # HTTP 路由（传统 REST，全 async）
 ├── agent/           # 02 多智能体框架（仅调用 run()）
 ├── db/
-│   ├── schema.sql   # 可执行生产建表 DDL（users/conversations/messages/agent_traces）
+│   ├── schema/sqlite/main.sql   # 可执行生产建表 DDL（users/conversations，单表收口）
+│   ├── history/      # 07 会话历史：收口进 conversations.data 的存储/检索/迁移
 │   └── models/      # SQLModel 表模型 + 请求/响应校验模型（同处一包）
 │       ├── connection.py        # 引擎/会话/get_db/init_db（enabled 门控）
 │       ├── user.py              # User 表
 │       ├── conversation.py      # Conversation 表 + ChatRequest/ChatResponse
-│       └── message.py           # Message 表 + AnalyzeRequest/AnalyzeResponse
+│       └── message.py           # AnalyzeRequest/AnalyzeResponse 契约（Message 表已并入 conversations.data）
 └── services/        # chat_service / analyze_service（消费 agent.run，落库）
 tests/               # pytest 测试
 ```

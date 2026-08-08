@@ -1,29 +1,30 @@
 """07-会话历史记录：SQLite 存储实现 + Noop 兜底 + 权限仲裁 + 降级。
 
-关键设计（收敛评审 B1-B6 / S1 / S2 / S4 / S7 / S8 / S9）：
-- B2/B3：所有读/删方法都收 ``requester_id``，store 内集中做「本人 或 管理员」仲裁；
-         管理员由配置 ``history.admin_user_ids`` 判定（03 的 User 表无 role 字段，不碰 03）。
-- B4：时间字段 INTEGER epoch 毫秒；``purge_before`` / ``keyword_search`` 时间过滤基于它。
-- B5：``turn_id`` 由 hook 生成并落到 session_traces / trace_events，``get_turn`` 据此组装。
-- B6：``init_tables()`` 幂等建表；``build_on_startup`` 默认 true，lifespan 调用。
-- S1：所有 DB 操作经**单一** ``asyncio.Lock`` 串行化（写串行化避免 SQLite 单写者锁）。
-- S2：写入前对所有文本字段统一脱敏（redact）。
-- S4：``fail_mode=local`` 时写失败落兜底 JSONL 文件；``replay_fallback()`` 可回填。
-- S7：每次 ``record_run`` 经 ``_upsert_meta`` 同步 msg_count / total_tokens / 时间。
-- S8：``fail_mode=silent`` 下写失败打 warning 日志（不阻断主链路）。
-- S9：``record_traces=false`` 时仅写 session_traces 头，``get_session`` 返回空 trace 树而非报错。
+设计（单表收口，评审：避免会话记录过度拆分）：
+- 03 的 ``conversations`` 表即「会话记录单表」：一次会话一行（id 主键），
+  会话头（user_id/scene/title/时间）作列，聊天正文 + 多专家执行轨迹自包含于
+  ``data``(JSON) 字段
+  ``{"messages":[{role,content,scene,created_at,            -- 用户/助手消息
+                  "trace":{run_id,turn_id,created_at,model,status,duration_ms,
+                           total_tokens,final_result,events:[事件树]}}]}`  -- 仅助手消息带 trace
+  原 messages / session_meta / session_traces / trace_events / history_embeddings 表已废弃并删除，
+  全部会话记录收口于 ``conversations.data``（单表，无历史拆分表）。
+- 权限仲裁（B2/B3）：所有读/删方法收 ``requester_id``，集中做「本人 或 管理员」。
+- conversations 时间字段为 ISO TEXT（UTC），本模块内部比较/排序统一转 epoch 毫秒。
+- 写入前对所有文本字段统一脱敏（redact，S2）。
+- fail_mode=silent 时写失败仅告警，绝不阻断主链路（S8）。
+- init_tables 幂等建表 + 幂等迁移（B6）。
 
-锁模型（关键）：``_fetchall`` / ``_fetchone`` / ``_execute`` 是**无锁原始助手**；每个对外公开方法
-自己获取一次 ``async with self._lock``，内部只调用原始助手（不二次加锁），避免 asyncio.Lock
-不可重入导致的死锁（record_run 内联 meta 写入，整段只持锁一次）。
+锁模型：对外公开方法各自获取一次 ``asyncio.Lock``，内部调用无锁原始助手
+（_execute/_fetchall/_fetchone），避免 asyncio.Lock 不可重入死锁。
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -33,11 +34,9 @@ import aiosqlite
 
 from app.db.history.models import (
     HistoryAccessError,
-    HistoryEmbedding,
     SearchHit,
     SessionDetail,
     SessionMeta,
-    SessionTrace,
     TraceEvent,
     TurnDetail,
 )
@@ -55,12 +54,15 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
 def _to_epoch_ms(value: Any) -> Optional[int]:
     """把 int/float/ISO 字符串归一化为 epoch 毫秒；无法解析返回 None。"""
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        # 大于 1e11 视为毫秒；否则视为秒
         if value > 1e11:
             return int(value)
         return int(value * 1000)
@@ -70,8 +72,6 @@ def _to_epoch_ms(value: Any) -> Optional[int]:
             return _to_epoch_ms(int(s))
         iso = s.replace("Z", "+00:00")
         try:
-            import datetime
-
             dt = datetime.datetime.fromisoformat(iso)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=datetime.timezone.utc)
@@ -81,8 +81,12 @@ def _to_epoch_ms(value: Any) -> Optional[int]:
     return None
 
 
+def _epoch_ms_to_iso(ms: int) -> str:
+    """epoch 毫秒 → ISO UTC 字符串（用于 conversations.updated_at 的 < 比较，ISO 字典序即时间序）。"""
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).isoformat()
+
+
 def _as_dict(result: Any) -> dict:
-    """把 AgentResult（dataclass）或 dict 转 dict。"""
     if isinstance(result, dict):
         return result
     try:
@@ -98,6 +102,107 @@ def _truncate_title(text: str, limit: int = 50) -> Optional[str]:
     return t[:limit]
 
 
+def _event_to_flat_dict(ev: TraceEvent) -> dict:
+    """TraceEvent → 平铺 dict（含 parent_event_id 与空 children，供 _nest_dict_events 嵌套）。"""
+    meta = ev.meta if isinstance(ev.meta, dict) else {}
+    return {
+        "id": ev.id,
+        "parent_event_id": ev.parent_event_id,
+        "agent": ev.agent or "",
+        "type": ev.type or "",
+        "summary_in": ev.summary_in or "",
+        "summary_out": ev.summary_out or "",
+        "meta_json": json.dumps(meta, ensure_ascii=False) if meta else "",
+        "tokens": ev.tokens or 0,
+        "duration_ms": ev.duration_ms or 0,
+        "created_at": ev.created_at or 0,
+        "children": [],
+    }
+
+
+def _nest_dict_events(flat: list[dict]) -> list[dict]:
+    """按 parent_event_id 把平铺事件嵌套成树（无父/父缺失 → 根）。"""
+    by_id: dict = {}
+    roots: list[dict] = []
+    for d in flat:
+        by_id[d["id"]] = d
+    for d in flat:
+        pid = d.get("parent_event_id")
+        if pid is not None and pid in by_id:
+            by_id[pid]["children"].append(d)
+        else:
+            roots.append(d)
+    return roots
+
+
+def _flatten_events(nodes: list[dict]):
+    """把嵌套事件树拍平为 TraceEvent 列表（供 TurnDetail.events）。"""
+    for n in nodes or []:
+        yield _dict_to_event(n)
+        yield from _flatten_events(n.get("children", []))
+
+
+def _dict_to_event(d: dict) -> TraceEvent:
+    meta_json = d.get("meta_json")
+    if not meta_json and d.get("meta"):
+        meta_json = json.dumps(d["meta"], ensure_ascii=False)
+    return TraceEvent(
+        id=d.get("id"),
+        run_id=d.get("run_id"),
+        parent_event_id=d.get("parent_event_id"),
+        turn_id=d.get("turn_id"),
+        seq=d.get("seq", 0),
+        agent=d.get("agent", ""),
+        type=d.get("type", ""),
+        summary_in=d.get("summary_in", ""),
+        summary_out=d.get("summary_out", ""),
+        meta_json=meta_json or "",
+        tokens=d.get("tokens", 0),
+        duration_ms=d.get("duration_ms", 0),
+        created_at=d.get("created_at", 0),
+    )
+
+
+def _count_msg(flat: list[dict]) -> int:
+    return sum(1 for d in flat if d.get("type") in ("user", "assistant"))
+
+
+def _row_to_meta(row: Any) -> SessionMeta:
+    """conversations 一行 → SessionMeta（从 data 推导 msg_count/total_tokens/时间）。"""
+    data = {}
+    raw = row["data"] if "data" in row.keys() else None
+    if raw:
+        try:
+            data = json.loads(raw) or {}
+        except Exception:
+            data = {}
+    msgs = data.get("messages", [])
+    msg_count = len(msgs)
+    total_tokens = sum(
+        (m.get("trace") or {}).get("total_tokens", 0) for m in msgs if m.get("trace")
+    )
+    title = row["title"]
+    if not title:
+        for m in msgs:
+            if m.get("role") == "user" and m.get("content"):
+                title = _truncate_title(m["content"])
+                break
+    times = [m.get("created_at") for m in msgs if m.get("created_at")]
+    first = min(times) if times else (_to_epoch_ms(row["created_at"]) or 0)
+    last = max(times) if times else (_to_epoch_ms(row["updated_at"]) or 0)
+    return SessionMeta(
+        conversation_id=str(row["id"]),
+        scene=row["scene"],
+        title=title,
+        status="active",
+        msg_count=msg_count,
+        total_tokens=total_tokens,
+        first_at=first,
+        last_at=last,
+        created_at=_to_epoch_ms(row["created_at"]) or 0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Noop 实现（history.enabled=false 兜底，主链路零阻塞）
 # ---------------------------------------------------------------------------
@@ -111,9 +216,6 @@ class NoopHistoryStore:
         return None
 
     async def record_run(self, **_kwargs: Any) -> None:
-        return None
-
-    async def upsert_session_meta(self, conversation_id: str, **_kwargs: Any) -> None:
         return None
 
     async def list_sessions(self, *args: Any, **_kwargs: Any) -> list[SessionMeta]:
@@ -166,7 +268,7 @@ class _RawDB:
 
 
 # ---------------------------------------------------------------------------
-# SQLite 实现
+# SQLite 实现（单表 conversations）
 # ---------------------------------------------------------------------------
 class SessionHistoryStore(_RawDB):
     enabled = True
@@ -210,8 +312,6 @@ class SessionHistoryStore(_RawDB):
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys=ON")
-        # 复用 03 主库（与 SQLAlchemy 连接同一文件）：开启 WAL + 等待超时，
-        # 避免 07 写与 03 写/读相互 database is locked（评审：统一主库后的并发安全）。
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA busy_timeout=5000")
 
@@ -221,7 +321,7 @@ class SessionHistoryStore(_RawDB):
             self._conn = None
 
     async def init_tables(self) -> None:
-        """幂等建表（评审 B6）：CREATE TABLE IF NOT EXISTS，可安全地重复调用。"""
+        """幂等建表（评审 B6）。"""
         await self._ensure()
         async with self._lock:
             sql = _SCHEMA_PATH.read_text(encoding="utf-8")
@@ -232,6 +332,8 @@ class SessionHistoryStore(_RawDB):
         if self._conn is None:
             await self.connect()
 
+    # 旧表聚合迁移已移除：单表设计，会话记录全部收口于 conversations.data，无历史拆分表需聚合。
+
     # —— 权限仲裁（B2/B3） —— #
     def _is_admin(self, requester_id: Any) -> bool:
         if not self.allow_admin_all:
@@ -241,19 +343,16 @@ class SessionHistoryStore(_RawDB):
     async def _require_access(self, conversation_id: str, requester_id: Any) -> None:
         """校验 requester 是否可访问该 conversation（本人 或 管理员）。"""
         requester_id = str(requester_id)
-        rows = await self._fetchall(
-            "SELECT DISTINCT user_id FROM session_traces WHERE conversation_id=?",
-            (conversation_id,),
+        row = await self._fetchone(
+            "SELECT user_id FROM conversations WHERE id=?", (conversation_id,)
         )
-        owners = {r["user_id"] for r in rows}
-        if requester_id in owners or self._is_admin(requester_id):
+        if row is None:
+            raise HistoryAccessError(f"会话 {conversation_id} 不存在")
+        if requester_id == str(row["user_id"]) or self._is_admin(requester_id):
             return
-        raise HistoryAccessError(
-            f"拒绝访问会话 {conversation_id}：非本人且非管理员"
-        )
+        raise HistoryAccessError(f"拒绝访问会话 {conversation_id}：非本人且非管理员")
 
     async def _on_write_failure(self, exc: Exception, payload: dict) -> None:
-        """写失败兜底（S4/S8）：不抛错，保证主链路不阻塞。"""
         logger.warning("07 历史写入失败（已降级，不影响主链路）: %s | payload=%s", exc, payload)
         if self.fail_mode == "local":
             try:
@@ -269,7 +368,7 @@ class SessionHistoryStore(_RawDB):
             except Exception as e2:  # pragma: no cover - 兜底中的兜底
                 logger.warning("07 本地兜底写入也失败: %s", e2)
 
-    # —— 写入 —— #
+    # —— 写入：聊天消息由 chat_service 写入 data；本方法把 trace 挂到该轮助手消息 —— #
     async def record_run(
         self,
         *,
@@ -295,157 +394,88 @@ class SessionHistoryStore(_RawDB):
             created_at = _now_ms()
             final_dict = _as_dict(result)
             if self.pii_redact:
-                final_dict = redact_value(final_dict)  # type: ignore[assignment]
-            final_json = json.dumps(final_dict, ensure_ascii=False)
+                final_dict = redact_value(final_dict)
 
-            # 整个写入（session_traces + trace_events + meta 同步）在单次持锁内完成，
-            # 仅持锁一次，避免 asyncio.Lock 不可重入死锁（S1）。
+            # 事件 → 平铺 dict → 脱敏 → 嵌套树（record_traces=false 时仅记头，events 留空）
+            if self.record_traces and events:
+                flat = [_event_to_flat_dict(ev) for ev in events]
+                if self.pii_redact:
+                    for d in flat:
+                        d["summary_in"] = redact_text(d["summary_in"])
+                        d["summary_out"] = redact_text(d["summary_out"])
+                        d["meta_json"] = redact_text(d["meta_json"])
+                nested = _nest_dict_events(flat)
+            else:
+                nested = []
+
+            trace = {
+                "run_id": run_id,
+                "turn_id": turn_id,
+                "created_at": created_at,
+                "model": model or self.model_name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "total_tokens": total_tokens,
+                "final_result": final_dict,
+                "events": nested,
+            }
+
             async with self._lock:
-                await self._conn.execute(
-                    "INSERT INTO session_traces "
-                    "(run_id,turn_id,conversation_id,user_id,scene,created_at,duration_ms,"
-                    "total_tokens,model,status,final_result) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        run_id,
-                        turn_id,
-                        conversation_id,
-                        user_id,
-                        scene,
-                        created_at,
-                        duration_ms,
-                        total_tokens,
-                        model or self.model_name,
-                        status,
-                        final_json,
-                    ),
+                row = await self._fetchone(
+                    "SELECT * FROM conversations WHERE id=?", (conversation_id,)
                 )
-                if self.record_traces:
-                    seq = 0
-                    for ev in events:
-                        seq += 1
-                        meta_json = ev.meta_json
-                        if not meta_json and ev.meta:
-                            meta_json = json.dumps(ev.meta, ensure_ascii=False)
-                        if self.pii_redact:
-                            summary_in = redact_text(ev.summary_in)
-                            summary_out = redact_text(ev.summary_out)
-                            meta_json = redact_text(meta_json) if meta_json else ""
-                        else:
-                            summary_in, summary_out = ev.summary_in, ev.summary_out
-                        await self._conn.execute(
-                            "INSERT INTO trace_events "
-                            "(run_id,parent_event_id,turn_id,seq,agent,type,summary_in,"
-                            "summary_out,meta_json,tokens,duration_ms,created_at) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                run_id,
-                                ev.parent_event_id,
-                                turn_id,
-                                seq,
-                                ev.agent,
-                                ev.type,
-                                summary_in,
-                                summary_out,
-                                meta_json,
-                                ev.tokens,
-                                ev.duration_ms,
-                                created_at,
-                            ),
-                        )
-                # 同步会话元信息（S7）——原始助手，不二次加锁
-                await self._upsert_meta(
-                    conversation_id,
-                    scene=scene,
-                    msg_count=2 if self.record_traces else 0,
-                    total_tokens=total_tokens,
-                    first_at=created_at,
-                    last_at=created_at,
-                    title=_truncate_title(user_message),
+                if row is None:
+                    # 兜底：chat 未落库时也自洽创建会话行（含空消息 + 带 trace 的助手消息）
+                    now_iso = _now_iso()
+                    await self._conn.execute(
+                        "INSERT INTO conversations (id,user_id,scene,title,created_at,updated_at,data) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            conversation_id,
+                            user_id,
+                            scene,
+                            _truncate_title(user_message),
+                            now_iso,
+                            now_iso,
+                            json.dumps({"messages": []}, ensure_ascii=False),
+                        ),
+                    )
+                    row = await self._fetchone(
+                        "SELECT * FROM conversations WHERE id=?", (conversation_id,)
+                    )
+                data = json.loads(row["data"] or "{}")
+                msgs = data.setdefault("messages", [])
+                # 把 trace 挂到该轮助手消息上：先按回复内容精确匹配，否则取最后一个无 trace 的助手消息
+                target = None
+                reply = final_dict.get("reply") or ""
+                for m in reversed(msgs):
+                    if m.get("role") == "assistant" and m.get("content") == reply:
+                        target = m
+                        break
+                if target is None:
+                    for m in reversed(msgs):
+                        if m.get("role") == "assistant" and not m.get("trace"):
+                            target = m
+                            break
+                if target is not None:
+                    target["trace"] = trace
+                else:
+                    msgs.append(
+                        {
+                            "role": "assistant",
+                            "content": reply,
+                            "scene": scene,
+                            "created_at": created_at,
+                            "trace": trace,
+                        }
+                    )
+                await self._conn.execute(
+                    "UPDATE conversations SET data=?, updated_at=? WHERE id=?",
+                    (json.dumps(data, ensure_ascii=False), _now_iso(), conversation_id),
                 )
                 await self._conn.commit()
         except Exception as exc:  # 安全网：绝不向上抛，避免阻断主链路
             await self._on_write_failure(exc, {"conversation_id": conversation_id, "run_id": run_id})
-
-    async def _upsert_meta(
-        self,
-        conversation_id: str,
-        *,
-        scene: Optional[str] = None,
-        title: Optional[str] = None,
-        status: Optional[str] = None,
-        msg_count: int = 0,
-        total_tokens: int = 0,
-        first_at: Optional[int] = None,
-        last_at: Optional[int] = None,
-    ) -> None:
-        """原始（无锁）meta 写入；调用方须持锁（record_run 内联 / upsert_session_meta 公开方法）。"""
-        row = await self._fetchone(
-            "SELECT * FROM session_meta WHERE conversation_id=?", (conversation_id,)
-        )
-        if row is None:
-            now = _now_ms()
-            await self._conn.execute(
-                "INSERT INTO session_meta "
-                "(conversation_id,scene,title,status,msg_count,total_tokens,first_at,"
-                "last_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (
-                    conversation_id,
-                    scene,
-                    title,
-                    status or "active",
-                    msg_count,
-                    total_tokens,
-                    first_at,
-                    last_at,
-                    now,
-                ),
-            )
-        else:
-            new_msg = (row["msg_count"] or 0) + msg_count
-            new_tok = (row["total_tokens"] or 0) + total_tokens
-            existing = [v for v in (row["first_at"], first_at) if v]
-            new_first = min(existing) if existing else row["first_at"]
-            existing_last = [v for v in (row["last_at"], last_at) if v]
-            new_last = max(existing_last) if existing_last else row["last_at"]
-            new_title = row["title"] or title
-            new_scene = row["scene"] or scene
-            await self._conn.execute(
-                "UPDATE session_meta SET msg_count=?,total_tokens=?,first_at=?,"
-                "last_at=?,title=?,scene=? WHERE conversation_id=?",
-                (new_msg, new_tok, new_first, new_last, new_title, new_scene, conversation_id),
-            )
-
-    async def upsert_session_meta(
-        self,
-        conversation_id: str,
-        *,
-        scene: Optional[str] = None,
-        title: Optional[str] = None,
-        status: Optional[str] = None,
-        msg_count: int = 0,
-        total_tokens: int = 0,
-        first_at: Optional[int] = None,
-        last_at: Optional[int] = None,
-    ) -> None:
-        if not self.enabled:
-            return
-        conversation_id = str(conversation_id)
-        try:
-            await self._ensure()
-            async with self._lock:
-                await self._upsert_meta(
-                    conversation_id,
-                    scene=scene,
-                    title=title,
-                    status=status,
-                    msg_count=msg_count,
-                    total_tokens=total_tokens,
-                    first_at=first_at,
-                    last_at=last_at,
-                )
-                await self._conn.commit()
-        except Exception as exc:
-            await self._on_write_failure(exc, {"conversation_id": conversation_id})
 
     # —— 查询/回放 —— #
     async def list_sessions(
@@ -464,74 +494,29 @@ class SessionHistoryStore(_RawDB):
         admin = self._is_admin(requester_id)
         scope = str(user_id) if user_id is not None else requester_id
         if not admin and scope != requester_id:
-            return []  # 越权列他人会话 → 返回空
+            return []
 
-        sql = "SELECT m.* FROM session_meta m"
-        joins = ""
+        sql = "SELECT * FROM conversations"
         conds: list[str] = []
         params: list = []
         if not admin:
-            joins = (
-                " JOIN (SELECT DISTINCT conversation_id, user_id FROM session_traces) t"
-                " ON m.conversation_id = t.conversation_id"
-            )
-            conds.append("t.user_id = ?")
+            conds.append("CAST(user_id AS TEXT) = ?")
             params.append(requester_id)
         else:
             if user_id is not None:
-                joins = (
-                    " JOIN (SELECT DISTINCT conversation_id, user_id FROM session_traces) t"
-                    " ON m.conversation_id = t.conversation_id"
-                )
-                conds.append("t.user_id = ?")
+                conds.append("CAST(user_id AS TEXT) = ?")
                 params.append(scope)
         if scene:
-            conds.append("m.scene = ?")
+            conds.append("scene = ?")
             params.append(scene)
-        if status:
-            conds.append("m.status = ?")
-            params.append(status)
-        sql = sql + joins
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY m.last_at DESC LIMIT ? OFFSET ?"
+        sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         params += [limit, offset]
 
         async with self._lock:
             rows = await self._fetchall(sql, params)
         return [_row_to_meta(r) for r in rows]
-
-    async def _read_three_messages(self, conversation_id: str) -> Optional[list[dict]]:
-        """优先从 03 主消息流读取权威主消息；不可用时返回 None（回退到 trace_events）。"""
-        try:
-            from sqlalchemy import select
-            from app.db.models.connection import engine as three_engine
-            from app.db.models import Message
-        except Exception:
-            return None
-        if three_engine is None:
-            return None
-        try:
-            from app.db.models.connection import async_session_maker as three_maker
-
-            if three_maker is None:
-                return None
-            cid = int(conversation_id)
-            async with three_maker() as s:
-                rows = (
-                    await s.execute(select(Message).where(Message.conversation_id == cid).order_by(Message.id))
-                ).scalars().all()
-                return [
-                    {
-                        "role": m.role,
-                        "content": m.content,
-                        "scene": m.scene,
-                        "created_at": int(m.created_at.timestamp() * 1000) if m.created_at else 0,
-                    }
-                    for m in rows
-                ]
-        except Exception:
-            return None
 
     async def get_session(
         self,
@@ -545,34 +530,26 @@ class SessionHistoryStore(_RawDB):
         conversation_id = str(conversation_id)
         async with self._lock:
             row = await self._fetchone(
-                "SELECT DISTINCT user_id FROM session_traces WHERE conversation_id=?",
-                (conversation_id,),
+                "SELECT * FROM conversations WHERE id=?", (conversation_id,)
             )
             if row is None:
-                return None  # 该会话无历史记录
+                return None
             await self._require_access(conversation_id, requester_id)
 
-            # 主消息流：优先 03，否则从 trace_events 的 user/assistant 事件重建
-            messages = await self._read_three_messages(conversation_id)
-            if not messages:
-                evs = await self._fetchall(
-                    "SELECT * FROM trace_events WHERE turn_id IN "
-                    "(SELECT turn_id FROM session_traces WHERE conversation_id=?) "
-                    "AND type IN ('user','assistant') ORDER BY created_at, seq",
-                    (conversation_id,),
-                )
-                messages = [
-                    {"role": r["type"], "content": r["summary_in"] or r["summary_out"], "scene": None,
-                     "created_at": r["created_at"]}
-                    for r in evs
-                ]
-
-            meta = await self._get_meta(conversation_id)
-            trace = None
-            has_trace = False
-            if with_trace:
-                trace = await self._build_trace_tree(conversation_id)
-                has_trace = trace is not None
+            meta = _row_to_meta(row)
+            data = json.loads(row["data"] or "{}")
+            msgs = data.get("messages", [])
+            messages = [
+                {
+                    "role": m.get("role"),
+                    "content": m.get("content"),
+                    "scene": m.get("scene"),
+                    "created_at": m.get("created_at", 0),
+                }
+                for m in msgs
+            ]
+            trace = [m["trace"] for m in msgs if m.get("trace")] if with_trace else None
+            has_trace = bool(trace)
         return SessionDetail(
             conversation_id=conversation_id,
             meta=meta,
@@ -580,63 +557,6 @@ class SessionHistoryStore(_RawDB):
             trace=trace,
             has_trace=has_trace,
         )
-
-    async def _get_meta(self, conversation_id: str) -> Optional[SessionMeta]:
-        row = await self._fetchone(
-            "SELECT * FROM session_meta WHERE conversation_id=?", (conversation_id,)
-        )
-        return _row_to_meta(row) if row else None
-
-    async def _build_trace_tree(self, conversation_id: str) -> Optional[list[dict]]:
-        """按 run_id 分组，事件按 parent_event_id 嵌套成树。S9：无事件返回空列表。"""
-        traces = await self._fetchall(
-            "SELECT * FROM session_traces WHERE conversation_id=? ORDER BY created_at",
-            (conversation_id,),
-        )
-        if not traces:
-            return None
-        runs: list[dict] = []
-        for t in traces:
-            events = await self._fetchall(
-                "SELECT * FROM trace_events WHERE run_id=? ORDER BY seq", (t["run_id"],)
-            )
-            tree = self._nest_events([_row_to_event(e) for e in events])
-            runs.append(
-                {
-                    "run_id": t["run_id"],
-                    "turn_id": t["turn_id"],
-                    "created_at": t["created_at"],
-                    "model": t["model"],
-                    "status": t["status"],
-                    "duration_ms": t["duration_ms"],
-                    "total_tokens": t["total_tokens"],
-                    "events": tree,
-                }
-            )
-        return runs
-
-    @staticmethod
-    def _nest_events(events: list[TraceEvent]) -> list[dict]:
-        by_id: dict[int, dict] = {}
-        roots: list[dict] = []
-        for ev in events:
-            node = {
-                "id": ev.id,
-                "agent": ev.agent,
-                "type": ev.type,
-                "summary_in": ev.summary_in,
-                "summary_out": ev.summary_out,
-                "meta": ev.meta,
-                "tokens": ev.tokens,
-                "duration_ms": ev.duration_ms,
-                "children": [],
-            }
-            by_id[ev.id] = node
-            if ev.parent_event_id is None or ev.parent_event_id not in by_id:
-                roots.append(node)
-            else:
-                by_id[ev.parent_event_id]["children"].append(node)
-        return roots
 
     async def get_turn(
         self,
@@ -648,35 +568,31 @@ class SessionHistoryStore(_RawDB):
             return None
         conversation_id = str(conversation_id)
         async with self._lock:
-            await self._require_access(conversation_id, requester_id)
-
-            t = await self._fetchone(
-                "SELECT * FROM session_traces WHERE conversation_id=? AND turn_id=? "
-                "ORDER BY created_at DESC LIMIT 1",
-                (conversation_id, turn_id),
+            row = await self._fetchone(
+                "SELECT * FROM conversations WHERE id=?", (conversation_id,)
             )
-            if t is None:
+            if row is None:
                 return None
-            evs = await self._fetchall(
-                "SELECT * FROM trace_events WHERE turn_id=? ORDER BY seq", (turn_id,)
-            )
-        events = [_row_to_event(e) for e in evs]
-        user_msg = next((e.summary_in for e in events if e.type == "user"), "")
-        assistant_reply = next((e.summary_out for e in events if e.type == "assistant"), "")
-        final = None
-        if t["final_result"]:
-            try:
-                final = json.loads(t["final_result"])
-            except Exception:
-                final = None
-        return TurnDetail(
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            user_message=user_msg,
-            assistant_reply=assistant_reply,
-            events=events,
-            final_result=final,
-        )
+            await self._require_access(conversation_id, requester_id)
+            data = json.loads(row["data"] or "{}")
+            for m in data.get("messages", []):
+                tr = m.get("trace")
+                if tr and tr.get("turn_id") == turn_id:
+                    flat = list(_flatten_events(tr.get("events", [])))
+                    user_msg = next((e.summary_in for e in flat if e.type == "user"), "")
+                    assistant_reply = next(
+                        (e.summary_out for e in flat if e.type == "assistant"),
+                        (tr.get("final_result") or {}).get("reply", ""),
+                    )
+                    return TurnDetail(
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        user_message=user_msg,
+                        assistant_reply=assistant_reply,
+                        events=flat,
+                        final_result=tr.get("final_result"),
+                    )
+        return None
 
     # —— 检索 —— #
     async def keyword_search(
@@ -706,16 +622,31 @@ class SessionHistoryStore(_RawDB):
         async with self._lock:
             return await _sem(self, requester_id, query, top_k=top_k)
 
-    @staticmethod
-    def _cosine(a: list[float], b: list[float]) -> float:
-        if len(a) != len(b) or not a:
-            return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
-        na = sum(x * x for x in a) ** 0.5
-        nb = sum(y * y for y in b) ** 0.5
-        if na == 0 or nb == 0:
-            return 0.0
-        return dot / (na * nb)
+    # —— 导出/复盘（委托 export.py） —— #
+    async def export_session(
+        self,
+        requester_id: str,
+        conversation_id: str,
+        fmt: str = "md",
+    ) -> str:
+        from app.db.history.export import render_export
+
+        detail = await self.get_session(requester_id, conversation_id, with_trace=True)
+        if detail is None:
+            return ""
+        return render_export(detail, fmt=fmt)
+
+    async def get_session_for_review(
+        self,
+        requester_id: str,
+        conversation_id: str,
+    ) -> str:
+        from app.db.history.export import render_review_context
+
+        detail = await self.get_session(requester_id, conversation_id, with_trace=True)
+        if detail is None:
+            return ""
+        return render_review_context(detail)
 
     # —— 删除/清理 —— #
     async def delete_session(
@@ -730,18 +661,7 @@ class SessionHistoryStore(_RawDB):
         try:
             async with self._lock:
                 await self._conn.execute(
-                    "DELETE FROM trace_events WHERE run_id IN "
-                    "(SELECT run_id FROM session_traces WHERE conversation_id=?)",
-                    (conversation_id,),
-                )
-                await self._conn.execute(
-                    "DELETE FROM history_embeddings WHERE conversation_id=?", (conversation_id,)
-                )
-                await self._conn.execute(
-                    "DELETE FROM session_traces WHERE conversation_id=?", (conversation_id,)
-                )
-                await self._conn.execute(
-                    "DELETE FROM session_meta WHERE conversation_id=?", (conversation_id,)
+                    "DELETE FROM conversations WHERE id=?", (conversation_id,)
                 )
                 await self._conn.commit()
             return 1
@@ -756,9 +676,7 @@ class SessionHistoryStore(_RawDB):
         *,
         cascade: bool = False,
     ) -> int:
-        """清理 before_date 之前的轨迹。仅管理员可调用（评审 B2）。
-
-        cascade=True 时联动清 03 主消息（谨慎，默认 false，受合规约束）。"""
+        """清理 before_date 之前的会话（按 updated_at）。仅管理员可调用（评审 B2）。"""
         if not self.enabled:
             return 0
         if not self._is_admin(requester_id):
@@ -766,25 +684,12 @@ class SessionHistoryStore(_RawDB):
         before = _to_epoch_ms(before_date)
         if before is None:
             return 0
+        before_iso = _epoch_ms_to_iso(before)
         try:
             async with self._lock:
-                if cascade:
-                    await self._cascade_purge_three(before)
                 await self._conn.execute(
-                    "DELETE FROM trace_events WHERE run_id IN "
-                    "(SELECT run_id FROM session_traces WHERE created_at < ?)",
-                    (before,),
-                )
-                await self._conn.execute(
-                    "DELETE FROM history_embeddings WHERE conversation_id IN "
-                    "(SELECT conversation_id FROM session_traces WHERE created_at < ?)",
-                    (before,),
-                )
-                await self._conn.execute(
-                    "DELETE FROM session_traces WHERE created_at < ?", (before,)
-                )
-                await self._conn.execute(
-                    "DELETE FROM session_meta WHERE last_at < ? OR last_at IS NULL", (before,)
+                    "DELETE FROM conversations WHERE updated_at < ? OR updated_at IS NULL",
+                    (before_iso,),
                 )
                 await self._conn.commit()
             return 1
@@ -792,159 +697,65 @@ class SessionHistoryStore(_RawDB):
             await self._on_write_failure(exc, {"before_date": str(before_date)})
             return 0
 
-    async def _cascade_purge_three(self, before_ms: int) -> None:
-        """联动清理 03 主消息（cascade=True 时）。仅清 before 之前、且 07 已知归属的会话。"""
-        try:
-            from sqlalchemy import delete
-            from app.db.models.connection import async_session_maker as three_maker
-            from app.db.models import Message, Conversation
-
-            if three_maker is None:
-                return
-            async with three_maker() as s:
-                await s.execute(
-                    delete(Message).where(
-                        Message.created_at < _ms_to_datetime(before_ms)
-                    )
-                )
-                await s.commit()
-        except Exception as exc:  # pragma: no cover - 联动清理失败不阻断 07 清理
-            logger.warning("07 cascade 清理 03 主消息失败: %s", exc)
-
-    # —— 导出/复盘（委托 export.py） —— #
-    async def export_session(
-        self, requester_id: str, conversation_id: str, fmt: str = "md"
-    ) -> str:
-        from app.db.history.export import render_export
-
-        detail = await self.get_session(requester_id, conversation_id, with_trace=True)
-        if detail is None:
-            return ""
-        return render_export(detail, fmt=fmt)
-
-    async def get_session_for_review(
-        self, requester_id: str, conversation_id: str
-    ) -> str:
-        from app.db.history.export import render_review_context
-
-        detail = await self.get_session(requester_id, conversation_id, with_trace=True)
-        if detail is None:
-            return ""
-        return render_review_context(detail)
-
 
 # ---------------------------------------------------------------------------
-# 行 → 模型 转换
+# 工厂：单例 store + 建表入口（供 lifespan / 测试调用）
 # ---------------------------------------------------------------------------
-def _row_to_meta(row) -> SessionMeta:
-    return SessionMeta(
-        conversation_id=row["conversation_id"],
-        scene=row["scene"],
-        title=row["title"],
-        status=row["status"] or "active",
-        msg_count=row["msg_count"] or 0,
-        total_tokens=row["total_tokens"] or 0,
-        first_at=row["first_at"] or 0,
-        last_at=row["last_at"] or 0,
-        created_at=row["created_at"] or 0,
+_store: Optional["SessionHistoryStore"] = None
+
+
+def _resolve_db_path() -> str:
+    """解析主库路径：优先 history.db_path 覆盖，否则复用 03 的 db.sqlite_path。"""
+    from app.config import config
+
+    hist = config.get("history") or {}
+    override = hist.get("db_path")
+    if override:
+        p = Path(override)
+    else:
+        db = config.get("db") or {}
+        p = Path(db.get("sqlite_path") or "./agentar.db")
+    if not p.is_absolute():
+        p = Path(__file__).resolve().parents[3] / p  # backend/
+    return str(p)
+
+
+def _build_store() -> Any:
+    from app.config import config
+
+    hist = config.get("history") or {}
+    if not hist.get("enabled", True):
+        return NoopHistoryStore()
+    return SessionHistoryStore(
+        db_path=_resolve_db_path(),
+        record_traces=hist.get("record_traces", True),
+        async_write=hist.get("async_write", True),
+        fail_mode=hist.get("fail_mode", "silent"),
+        pii_redact=hist.get("pii_redact", True),
+        semantic_search=hist.get("semantic_search", False),
+        allow_admin_all=hist.get("allow_admin_all", False),
+        admin_user_ids=hist.get("admin_user_ids") or [],
+        retention_days=hist.get("retention_days", 180),
+        model_name=hist.get("model_name") or "unknown",
     )
-
-
-def _row_to_event(row) -> TraceEvent:
-    return TraceEvent(
-        id=row["id"],
-        run_id=row["run_id"],
-        parent_event_id=row["parent_event_id"],
-        turn_id=row["turn_id"],
-        seq=row["seq"] or 0,
-        agent=row["agent"] or "",
-        type=row["type"] or "",
-        summary_in=row["summary_in"] or "",
-        summary_out=row["summary_out"] or "",
-        meta_json=row["meta_json"] or "",
-        tokens=row["tokens"] or 0,
-        duration_ms=row["duration_ms"] or 0,
-        created_at=row["created_at"] or 0,
-    )
-
-
-def _ms_to_datetime(ms: int):
-    import datetime
-
-    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc)
-
-
-# ---------------------------------------------------------------------------
-# 工厂（单例缓存，便于测试 reset）
-# ---------------------------------------------------------------------------
-_STORE: Any = None
-
-
-def _detect_model_name() -> str:
-    try:
-        from app.config import config
-
-        model_cfg = config.get("model") or {}
-        mode = model_cfg.get("mode", "api")
-        sub = model_cfg.get(mode) or {}
-        return sub.get("model_name") or "unknown"
-    except Exception:
-        return "unknown"
 
 
 def get_history_store() -> Any:
-    """按 config.history.enabled 返回实现；enabled=false 时返回 NoopHistoryStore。"""
-    global _STORE
-    if _STORE is not None:
-        return _STORE
-    from app.config import config
-
-    cfg = config.get("history") or {}
-    if not cfg.get("enabled", False):
-        _STORE = NoopHistoryStore()
-        return _STORE
-    # 复用 03 主库（db.sqlite_path 指定的 agentar.db），不另开文件；
-    # history.db_path 仅作为可选覆盖项（默认不配，走主库）。
-    db_path = cfg.get("db_path")
-    if not db_path:
-        db_path = (config.get("db", {}) or {}).get("sqlite_path", "./agentar.db")
-    if not os.path.isabs(db_path):
-        db_path = str(Path(db_path).resolve())
-    _STORE = SessionHistoryStore(
-        db_path,
-        record_traces=bool(cfg.get("record_traces", True)),
-        async_write=bool(cfg.get("async_write", True)),
-        fail_mode=cfg.get("fail_mode", "silent"),
-        pii_redact=bool(cfg.get("pii_redact", True)),
-        semantic_search=bool(cfg.get("semantic_search", False)),
-        allow_admin_all=bool(cfg.get("allow_admin_all", False)),
-        admin_user_ids=cfg.get("admin_user_ids", []) or [],
-        retention_days=int(cfg.get("retention_days", 180)),
-        model_name=_detect_model_name(),
-        history_dir=os.path.dirname(db_path),
-    )
-    return _STORE
+    """返回 07 历史存储单例（按需惰性构建）。"""
+    global _store
+    if _store is None:
+        _store = _build_store()
+    return _store
 
 
 def reset_history_store() -> None:
-    """清空单例缓存（测试用）。"""
-    global _STORE
-    _STORE = None
+    """测试/重载时清空单例（下次 get 重建）。"""
+    global _store
+    _store = None
 
 
 async def init_history_db() -> None:
-    """幂等建表入口（评审 B6），由 main.py lifespan 调用；enabled=false 时直接返回。"""
+    """启动时幂等建表 + 迁移旧表（评审 B6）。"""
     store = get_history_store()
-    if not store.enabled:
-        return
     await store.connect()
     await store.init_tables()
-
-
-__all__ = [
-    "SessionHistoryStore",
-    "NoopHistoryStore",
-    "get_history_store",
-    "reset_history_store",
-    "init_history_db",
-]

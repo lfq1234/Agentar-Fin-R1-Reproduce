@@ -35,6 +35,9 @@ class Conversation(ConversationBase, table=True):
     title: Optional[str] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     updated_at: datetime = Field(default_factory=_utcnow, nullable=False)
+    # 聊天记录 JSON：{"messages":[{role,content,scene,created_at,("trace":{...})}]}
+    # 07 会话历史（多专家轨迹）收口进 data，不再拆独立表（评审：避免会话记录过度拆分）。
+    data: Optional[str] = Field(default=None, nullable=True)
 
 
 class ChatRequest(ConversationBase):
@@ -61,3 +64,6 @@ class ChatResponse(ConversationBase):
     # 07 落库用：多智能体细粒度步骤（route/rag/expert_opinion/synthesize/revise），
     # 经 hooks 转成 trace_events 落到同一 conversation_id 的轨迹。
     agent_trace: List[Dict[str, Any]] = Field(default_factory=list)
+    # 02-多人对话模式：把一次编排中的各智能体步骤拆成独立气泡返回，
+    # 前端按顺序渲染，形成 "Coordinator → 专家 → 合规 → 风控 → 最终答案" 的群聊效果。
+    messages: List[Dict[str, Any]] = Field(default_factory=list)

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import uuid
@@ -100,9 +101,11 @@ def test_continuation_and_persistence(client, auth_headers):
     n_conv = conn.execute(
         "SELECT COUNT(*) FROM conversations WHERE id=?", (cid,)
     ).fetchone()[0]
-    n_msg = conn.execute(
-        "SELECT COUNT(*) FROM messages WHERE conversation_id=?", (cid,)
-    ).fetchone()[0]
+    row = conn.execute(
+        "SELECT data FROM conversations WHERE id=?", (cid,)
+    ).fetchone()
+    data = json.loads(row[0]) if row and row[0] else {}
+    n_msg = len(data.get("messages", []))
     conn.close()
     assert n_conv == 1, "会话未落库"
     assert n_msg >= 2, f"消息未落库（期望>=2，实际 {n_msg}）"

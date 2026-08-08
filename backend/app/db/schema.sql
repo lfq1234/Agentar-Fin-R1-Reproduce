@@ -1,4 +1,0 @@
--- 本文件已迁移：DDL 统一收口至 app/db/schema/sqlite/main.sql
--- （合并 03 主库 users/conversations/messages 与 07 会话历史 session_meta/
---  session_traces/trace_events/history_embeddings，均落同一 SQLite 主库 agentar.db）。
--- 实际建表以 app/db/schema/sqlite/main.sql 为准；本文件仅保留以兼容历史引用。

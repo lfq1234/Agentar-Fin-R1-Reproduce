@@ -8,7 +8,6 @@ from __future__ import annotations
 from app.db.history.models import (
     HistoryAccessError,
     HistoryStore,
-    HistoryEmbedding,
     SearchHit,
     SessionDetail,
     SessionMeta,
@@ -31,7 +30,6 @@ __all__ = [
     "TraceEvent",
     "SessionTrace",
     "SessionMeta",
-    "HistoryEmbedding",
     "SearchHit",
     "SessionDetail",
     "TurnDetail",

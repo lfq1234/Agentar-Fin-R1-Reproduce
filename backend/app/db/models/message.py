@@ -1,40 +1,20 @@
-"""Message 表模型与 analyze 契约（SQLModel 兼作校验）。
+"""Message 契约（analyze 用，非表模型）。
 
-采用 SQLModel 的 Base 继承范式：
-- MessageBase 定义共享字段（scene）；
-- Message（表模型）、AnalyzeRequest（入参）、AnalyzeResponse（出参）都继承它。
+消息表（messages）已并入 ``conversations.data``（单表记录聊天，见 03/07 收口方案）：
+聊天正文 + 多专家执行轨迹全部自包含于 ``conversations.data``(JSON) 字段，
+本文件仅保留 analyze 接口的请求/响应契约，不再定义 Message 表模型。
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from sqlmodel import Field, ForeignKey, SQLModel
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from sqlmodel import Field, SQLModel
 
 
 class MessageBase(SQLModel):
-    """消息共享字段：表模型与 analyze 契约共用 scene。"""
+    """消息共享字段：analyze 契约共用 scene。"""
 
     scene: Optional[str] = Field(default=None, nullable=True)
-
-
-class Message(MessageBase, table=True):
-    __tablename__ = "messages"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    conversation_id: int = Field(
-        foreign_key="conversations.id",
-        nullable=False,
-        index=True,
-        ondelete="CASCADE",
-    )
-    role: str = Field(default="user", nullable=False)  # user / assistant / system
-    content: str = Field(default="", nullable=False)
-    created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 
 
 class AnalyzeRequest(MessageBase):
