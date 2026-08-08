@@ -38,9 +38,19 @@ def set_embedder(fn) -> None:
 def _embed(texts: list[str]) -> list[list[float]]:
     global _EMBEDDER
     if _EMBEDDER is None:
-        from app.model import get_embedder  # 惰性导入，避免顶层拉起 torch
+        from app import config as config_module
 
-        _EMBEDDER = get_embedder()
+        kb_cfg = config_module.config.get("kb", {}) or {}
+        local_cfg = kb_cfg.get("local_embed") or {}
+        if local_cfg.get("enabled"):
+            # 06 §4 进程内嵌入直载（默认 bert-base-chinese，离线可用）
+            from app.db.knowledge.local_embed import get_local_embedder
+
+            _EMBEDDER = get_local_embedder()
+        else:
+            from app.model import get_embedder  # 惰性导入，避免顶层拉起 torch
+
+            _EMBEDDER = get_embedder()
     return _EMBEDDER.embed(texts)
 
 
@@ -70,8 +80,11 @@ def ingest_one(filename: str, raw: bytes, user_id: int) -> dict:
         if not chunks:
             raise parser.EmptyDocument("文档切分后无有效内容块。")
 
-        vectors = _embed([c.text for c in chunks])
         chunk_ids = store.add_chunks(doc_id, user_id, chunks)
+
+        # 08 嵌入：进程内本地嵌入模型（kb.local_embed 启用时）直出向量并写入 DuckDB
+        # 向量索引；未启用则回退 01 get_embedder()。嵌入失败由外层统一标 error，不静默降级。
+        vectors = _embed([c.text for c in chunks])
         get_vector_index().upsert(doc_id, user_id, chunk_ids, vectors)
 
         if cfg["graph"]["enabled"]:
@@ -80,7 +93,8 @@ def ingest_one(filename: str, raw: bytes, user_id: int) -> dict:
             )
             store.add_graph(doc_id, user_id, nodes, edges)
 
-        store.set_status(doc_id, "done", summary=parser.make_summary(text))
+        summary = parser.make_summary(text)
+        store.set_status(doc_id, "done", summary=summary)
     except (parser.UnsupportedDocument, parser.EmptyDocument) as exc:
         store.set_status(doc_id, "error", error=str(exc))
     except Exception as exc:  # 嵌入 / 落库等异常同样降级为该文档 error，不 500

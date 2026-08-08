@@ -177,10 +177,20 @@ class DuckDBKnowledgeStore:
 
     def _get_embedder(self):
         if self._embedder is None:
-            # 函数内惰性导入，避免 import 时拉起 app.model（local 实现依赖 torch）。
-            from app.model import get_embedder
+            from app import config as config_module
 
-            self._embedder = get_embedder()
+            kb_cfg = config_module.config.get("kb", {}) or {}
+            local_cfg = kb_cfg.get("local_embed") or {}
+            if local_cfg.get("enabled"):
+                # 06 §4 进程内嵌入直载（默认 bert-base-chinese，离线可用）
+                from app.db.knowledge.local_embed import get_local_embedder
+
+                self._embedder = get_local_embedder()
+            else:
+                # 函数内惰性导入，避免 import 时拉起 app.model（local 实现依赖 torch）。
+                from app.model import get_embedder
+
+                self._embedder = get_embedder()
         return self._embedder
 
     def _embed(self, texts: list[str]) -> list[list[float]]:

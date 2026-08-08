@@ -96,8 +96,8 @@ kb:
     max_chars: 600
     overlap: 80
   local_embed:
-    enabled: false            # true 时启用进程内嵌入直载（不依赖外部嵌入服务）
-    model_path: ${LOCAL_EMBED_MODEL_PATH}   # 本地嵌入模型目录，由环境变量/本地 secret 注入，不入库
+    enabled: true             # true 时启用进程内嵌入直载（不依赖外部嵌入服务 localhost:9000）
+    model_path: D:/models/Qwen3-0.6B   # 本地已完整存在的模型（HF 缓存的 bert-base-chinese 权重未下载，离线不可用）；可用 LOCAL_EMBED_MODEL_PATH 覆盖
 
 # —— 08-个人文档与知识图谱后端（服务前端 03 双标签面板） ——
 # 结构化表（personal_documents / personal_doc_chunks / personal_graph_*）与向量表
