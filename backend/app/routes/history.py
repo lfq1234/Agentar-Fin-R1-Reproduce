@@ -61,3 +61,13 @@ async def export_session(
     store = get_history_store()
     content = await store.export_session(str(current_user.id), conversation_id, fmt=fmt)
     return {"conversation_id": conversation_id, "fmt": fmt, "content": content}
+
+
+@router.delete("/v1/history/sessions/{conversation_id}")
+async def delete_session(
+    conversation_id: str,
+    current_user: User = CurrentUser,
+) -> dict:
+    store = get_history_store()
+    deleted = await store.delete_session(str(current_user.id), conversation_id)
+    return {"conversation_id": conversation_id, "deleted": deleted}

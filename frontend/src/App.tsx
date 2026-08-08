@@ -68,7 +68,11 @@ export function App() {
       }
       try {
         const u = await me();
-        if (!cancelled) setUser(u);
+        if (!cancelled) {
+          setUser(u);
+          // 07：登录成功后立即拉取后端历史会话列表。
+          loadSessions();
+        }
       } catch {
         if (!cancelled) clearToken();
       } finally {
@@ -78,7 +82,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadSessions]);
 
   // 运行时鉴权失败（401/403）由 client 派发，统一登出。
   useEffect(() => {
@@ -93,6 +97,7 @@ export function App() {
     selectSession,
     createSession,
     deleteSession,
+    loadSessions,
     personalDocsOpen,
     togglePersonalDocs,
     sidebarOpen,
@@ -144,7 +149,14 @@ export function App() {
     );
   }
   if (!user) {
-    return <LoginPage onLoggedIn={(u) => setUser(u)} />;
+    return (
+      <LoginPage
+        onLoggedIn={(u) => {
+          setUser(u);
+          loadSessions();
+        }}
+      />
+    );
   }
 
   return (

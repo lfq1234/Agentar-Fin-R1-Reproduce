@@ -12,6 +12,7 @@ from app.config import config
 from app.core import security
 from app.db.models import init_db
 from app.db.history import init_history_db, install_history_tracing
+from app.db.history.models import HistoryAccessError
 from app.db.migrate import migrate_user_columns
 from app.model.exceptions import ModelInvokeError
 from app.routes import auth as auth_routes
@@ -76,4 +77,15 @@ async def _model_invoke_error_handler(
     return JSONResponse(
         status_code=500,
         content={"error": "model_invoke_failed", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(HistoryAccessError)
+async def _history_access_error_handler(
+    request: Request, exc: HistoryAccessError
+) -> JSONResponse:
+    """会话越权访问（非本人且非管理员）统一返回 403。"""
+    return JSONResponse(
+        status_code=403,
+        content={"error": "history_access_denied", "detail": str(exc)},
     )

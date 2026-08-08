@@ -8,11 +8,21 @@ export interface ChatRequest {
   conversation_id?: number;
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant" | "agent";
+  content: string;
+  agent?: string;
+  avatar?: string;
+  mention?: string | null;
+  type?: string;
+}
+
 export interface ChatResponse {
   conversation_id?: number | null;
   reply: string;
   compliance_notes: string[];
   risk_flags: string[];
+  messages?: ChatMessage[];
 }
 
 export interface AnalyzeRequest {
@@ -28,15 +38,50 @@ export interface AnalyzeResponse {
 
 // 前端消息流条目（来源为后端返回，仅内存维护，不独立持久化）。
 export interface UiMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "agent";
   content: string;
+  agent?: string;
+  avatar?: string;
+  mention?: string | null;
+  type?: string;
   compliance?: string[];
   risk?: string[];
 }
 
 export type BackendStatus = "unknown" | "ok" | "down";
 
-// 前端本地会话（本期仅内存维护，刷新即丢失；后续可接后端会话列表接口）。
+// 07：后端 /api/v1/history/sessions 返回的会话元信息。
+export interface SessionMeta {
+  conversation_id: string; // 后端 conversations.id（字符串形式）
+  scene: string | null;
+  title: string | null;
+  status: string;
+  msg_count: number;
+  total_tokens: number;
+  first_at: number; // epoch ms
+  last_at: number; // epoch ms
+  created_at: number; // epoch ms
+}
+
+// 07：后端 /api/v1/history/sessions/{id} 返回的会话详情。
+export interface SessionDetail {
+  conversation_id: string;
+  meta: SessionMeta;
+  messages: Array<{
+    role: "user" | "assistant" | "agent";
+    content: string;
+    scene?: string | null;
+    created_at?: number;
+    agent?: string;
+    avatar?: string;
+    mention?: string | null;
+    type?: string;
+  }>;
+  trace?: unknown;
+  has_trace: boolean;
+}
+
+// 前端本地会话（已从后端历史接口加载，刷新后重新拉取）。
 export interface ChatSession {
   id: string;
   title: string;

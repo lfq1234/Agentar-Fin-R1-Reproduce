@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { chat, analyze, health, type ApiError } from "../api/client";
+import {
+  chat,
+  analyze,
+  health,
+  listSessions,
+  getSession,
+  deleteSession as apiDeleteSession,
+  type ApiError,
+} from "../api/client";
 import type {
   AnalyzeRequest,
   AnalyzeResponse,
   BackendStatus,
   ChatRequest,
   ChatSession,
+  SessionMeta,
   UiMessage,
 } from "../types/agent";
 
@@ -29,6 +38,39 @@ function createBlankSession(): ChatSession {
     conversationId: null,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+// 07：后端 SessionMeta → 前端 ChatSession（history 为空，点击会话时再拉详情）。
+function metaToSession(meta: SessionMeta): ChatSession {
+  return {
+    id: meta.conversation_id,
+    title: meta.title || "新对话",
+    history: [],
+    conversationId: Number(meta.conversation_id) || null,
+    createdAt: meta.created_at || meta.first_at || Date.now(),
+    updatedAt: meta.last_at || Date.now(),
+  };
+}
+
+// 07：后端历史消息 → 前端 UiMessage（老数据可能不带 agent/avatar，降级为纯文本展示）。
+function historyMsgToUiMessage(m: {
+  role: "user" | "assistant" | "agent";
+  content: string;
+  scene?: string | null;
+  created_at?: number;
+  agent?: string;
+  avatar?: string;
+  mention?: string | null;
+  type?: string;
+}): UiMessage {
+  return {
+    role: m.role,
+    content: m.content || "",
+    agent: m.agent,
+    avatar: m.avatar,
+    mention: m.mention,
+    type: m.type,
   };
 }
 
@@ -102,25 +144,42 @@ export function useChat() {
 
     try {
       const res = await chat(req);
+      const newConversationId = res.conversation_id ?? null;
+      const newBackendId = newConversationId != null ? String(newConversationId) : sid;
+      setCurrentSessionId(newBackendId);
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sid) return s;
-          const history: UiMessage[] = [
-            ...s.history,
-            {
-              role: "assistant",
-              content: res.reply,
-              compliance: res.compliance_notes,
-              risk: res.risk_flags,
-            },
-          ];
+          // 02 多人对话：后端返回 messages 时，按顺序渲染每个智能体气泡；
+          // 未返回时退化为旧版单条助手回复。
+          const replyMessages: UiMessage[] =
+            res.messages && res.messages.length > 0
+              ? res.messages.map((m) =>
+                  m.role === "assistant"
+                    ? {
+                        ...m,
+                        compliance: res.compliance_notes,
+                        risk: res.risk_flags,
+                      }
+                    : { ...m },
+                )
+              : [
+                  {
+                    role: "assistant",
+                    content: res.reply,
+                    compliance: res.compliance_notes,
+                    risk: res.risk_flags,
+                  },
+                ];
+          const history: UiMessage[] = [...s.history, ...replyMessages];
           // 首次出现用户消息后，标题从「新对话」派生
           const title = s.title === "新对话" ? deriveTitle(history) : s.title;
           return {
             ...s,
+            id: newBackendId,
             history,
             title,
-            conversationId: res.conversation_id ?? s.conversationId,
+            conversationId: newConversationId,
             updatedAt: Date.now(),
           };
         }),
@@ -155,18 +214,64 @@ export function useChat() {
     }
   }, [analyzing, currentSession]);
 
+  // 07：登录后从后端拉取历史会话列表；空列表时保留初始空白会话。
+  const loadSessions = useCallback(async () => {
+    try {
+      const metas = await listSessions();
+      if (metas.length === 0) return;
+      const loaded = metas.map(metaToSession);
+      setSessions(loaded);
+      setCurrentSessionId(loaded[0].id);
+    } catch (e) {
+      // 历史加载失败不阻断主链路，仅静默降级（避免一启动就弹错误）。
+      // eslint-disable-next-line no-console
+      console.warn("加载历史会话失败", e);
+    }
+  }, []);
+
+  // 07：点击历史会话且尚未加载详情时，拉取 conversations.data 中的消息。
+  const loadSessionDetail = useCallback(async (id: string) => {
+    try {
+      const detail = await getSession(id);
+      const messages = (detail.messages || []).map(historyMsgToUiMessage);
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                title: detail.meta.title || s.title,
+                history: messages,
+                updatedAt: detail.meta.last_at || Date.now(),
+              }
+            : s,
+        ),
+      );
+    } catch (e) {
+      setError(((e as ApiError).message) ?? "加载会话详情失败");
+    }
+  }, []);
+
   // 新建会话：激活并关闭个人文档 / 收起移动端侧边栏。
   const createSession = useCallback(() => {
     const ns = createBlankSession();
-    setSessions((prev) => [...prev, ns]);
+    setSessions((prev) => [ns, ...prev]);
     setCurrentSessionId(ns.id);
     setPersonalDocsOpen(false);
     setSidebarOpen(false);
   }, []);
 
-  // 删除会话：删当前则切到 updatedAt 最新的；无会话则自动新建空白。
+  // 删除会话：先调后端删除，再本地移除；删当前则切到 updatedAt 最新的。
   const deleteSession = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const target = sessions.find((s) => s.id === id);
+      if (target?.conversationId != null) {
+        try {
+          await apiDeleteSession(id);
+        } catch (e) {
+          setError(((e as ApiError).message) ?? "删除会话失败");
+          return;
+        }
+      }
       setSessions((prev) => {
         const remaining = prev.filter((s) => s.id !== id);
         if (remaining.length === 0) {
@@ -182,15 +287,23 @@ export function useChat() {
       });
       setPersonalDocsOpen(false);
     },
-    [currentSessionId],
+    [sessions, currentSessionId],
   );
 
-  // 切换会话：关闭个人文档 / 收起移动端侧边栏（评审：互斥）。
-  const selectSession = useCallback((id: string) => {
-    setCurrentSessionId(id);
-    setPersonalDocsOpen(false);
-    setSidebarOpen(false);
-  }, []);
+  // 切换会话：关闭个人文档 / 收起移动端侧边栏（评审：互斥）；
+  // 若该会话历史未加载，则异步拉取详情。
+  const selectSession = useCallback(
+    (id: string) => {
+      setCurrentSessionId(id);
+      setPersonalDocsOpen(false);
+      setSidebarOpen(false);
+      const target = sessions.find((s) => s.id === id);
+      if (target && target.conversationId != null && target.history.length === 0) {
+        loadSessionDetail(id);
+      }
+    },
+    [sessions, loadSessionDetail],
+  );
 
   const togglePersonalDocs = useCallback(() => setPersonalDocsOpen((v) => !v), []);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
@@ -207,6 +320,7 @@ export function useChat() {
     selectSession,
     createSession,
     deleteSession,
+    loadSessions,
     personalDocsOpen,
     togglePersonalDocs,
     sidebarOpen,

@@ -8,6 +8,8 @@ import type {
   AuthUser,
   LoginCredentials,
   RegisterPayload,
+  SessionMeta,
+  SessionDetail,
 } from "../types/agent";
 import { mockDocuments, mockGraph } from "../mock/personalDocs";
 
@@ -131,6 +133,20 @@ export async function register(payload: RegisterPayload): Promise<AuthUser> {
 // 当前用户：需令牌，401/403 由 request 统一拦截。
 export async function me(): Promise<AuthUser> {
   return get<AuthUser>("/auth/me");
+}
+
+// ===== 07 · 会话历史接口（依赖鉴权，后端从 JWT 解析 user_id） =====
+
+export async function listSessions(): Promise<SessionMeta[]> {
+  return get<SessionMeta[]>("/history/sessions");
+}
+
+export async function getSession(conversation_id: string): Promise<SessionDetail> {
+  return get<SessionDetail>(`/history/sessions/${encodeURIComponent(conversation_id)}`);
+}
+
+export async function deleteSession(conversation_id: string): Promise<void> {
+  await request<void>(`/history/sessions/${encodeURIComponent(conversation_id)}`, { method: "DELETE" });
 }
 
 // ===== 03 · 个人文档与知识图谱接口（依赖鉴权，不再前端传 user_id） =====
