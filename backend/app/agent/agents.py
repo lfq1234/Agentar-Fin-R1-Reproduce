@@ -143,17 +143,21 @@ def build_agents(inner: ModelInterface) -> dict:
         sys_prompt=_load_prompt("rag"),
         toolkit=build_toolkit("rag"),
     )
-    agents["review"] = ReActAgentX(
+    # 04 审核 / 05 风控：用 DialogAgentX（纯对话）而非 ReActAgentX。
+    #    这两个 agent 真正的职责是"对专家答案产出建议式风险/合规提示"，
+    #    不需要调用任何工具——先前 ReActAgentX 会让模型走
+    #    `<thought>...<function>finish</function>` 协议，finish 工具若
+    #    没填 response 字段就 fallback 到 memory，原始协议文本会作为
+    #    "风险提示" 暴露给前端，看着像机器人话术。
+    agents["review"] = DialogAgentX(
         name="ComplianceReviewer",
         inner=inner,
         sys_prompt=_load_prompt("review"),
-        toolkit=build_toolkit("review"),
     )
-    agents["risk"] = ReActAgentX(
+    agents["risk"] = DialogAgentX(
         name="RiskController",
         inner=inner,
         sys_prompt=_load_prompt("risk"),
-        toolkit=build_toolkit("risk"),
     )
 
     return agents

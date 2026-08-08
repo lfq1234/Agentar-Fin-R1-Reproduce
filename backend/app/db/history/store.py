@@ -163,10 +163,6 @@ def _dict_to_event(d: dict) -> TraceEvent:
     )
 
 
-def _count_msg(flat: list[dict]) -> int:
-    return sum(1 for d in flat if d.get("type") in ("user", "assistant"))
-
-
 def _row_to_meta(row: Any) -> SessionMeta:
     """conversations 一行 → SessionMeta（从 data 推导 msg_count/total_tokens/时间）。"""
     data = {}
@@ -545,6 +541,12 @@ class SessionHistoryStore(_RawDB):
                     "content": m.get("content"),
                     "scene": m.get("scene"),
                     "created_at": m.get("created_at", 0),
+                    # 02 多人对话：补全智能体身份字段，
+                    # 与 chat_service._persist 写入字段对齐，避免历史加载时丢失头像/名称。
+                    "agent": m.get("agent"),
+                    "avatar": m.get("avatar"),
+                    "mention": m.get("mention"),
+                    "type": m.get("type"),
                 }
                 for m in msgs
             ]

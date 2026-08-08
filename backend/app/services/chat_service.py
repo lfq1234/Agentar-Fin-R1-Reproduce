@@ -187,9 +187,12 @@ async def _persist(
                 "created_at": ms + idx + 1,
             }
         )
-    data["messages"].append(
-        {"role": "assistant", "content": reply, "scene": msg_scene, "created_at": ms + len(agent_messages or []) + 1}
-    )
+    # (d) 防御 _build_messages 已含 assistant 时的双写：agent_messages 末尾已是
+    #    最终 assistant 气泡，不再追加一条无 agent/type 的 legacy assistant。
+    if not any(am.get("role") == "assistant" for am in (agent_messages or [])):
+        data["messages"].append(
+            {"role": "assistant", "content": reply, "scene": msg_scene, "created_at": ms + len(agent_messages or []) + 1}
+        )
     conv.data = json.dumps(data, ensure_ascii=False)
     conv.updated_at = now
     if not conv.title and req.message:

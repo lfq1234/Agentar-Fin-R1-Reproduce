@@ -92,6 +92,10 @@ def get_local_embedder():
 class _LocalEmbedder:
     """对齐 app.model.base.EmbedderInterface 的最小子集：``embed(texts)``。"""
 
+    # 每批最多处理的行数，避免 output_hidden_states=True 时全部块一次性 batch
+    # 导致显存/内存爆炸（28 层 × batch × 512 × 768 ≈ 15MB/chunk，100 块 = 1.5GB 仅隐藏状态）。
+    _EMBED_BATCH = 8
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         import torch
 
@@ -99,24 +103,27 @@ class _LocalEmbedder:
             texts = [texts]
         tok = _TOKENIZER
         mdl = _MODEL
-        enc = tok(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt",
-        )
-        enc = {k: v.to(_DEVICE) for k, v in enc.items()}
-        with torch.no_grad():
-            out = mdl(**enc, output_hidden_states=True)
-        # AutoModelForCausalLM 返回所有层 hidden_states，取最后一层；(B, L, H)
-        # attention_mask: (B, L)。pooling 统一在 float32 做以避免 float16 与 mask
-        # 的 dtype 不匹配，同时保证数值稳定。
-        hs = out.hidden_states[-1].float()
-        mask = enc["attention_mask"].unsqueeze(-1).float()
-        summed = (hs * mask).sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1e-9)
-        pooled = summed / counts
-        # L2 归一化：余弦检索前统一归一，距离即内积
-        norms = torch.nn.functional.normalize(pooled, p=2, dim=1)
-        return norms.cpu().tolist()
+
+        all_norms: list[list[float]] = []
+        for start in range(0, len(texts), self._EMBED_BATCH):
+            batch = texts[start : start + self._EMBED_BATCH]
+            enc = tok(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            enc = {k: v.to(_DEVICE) for k, v in enc.items()}
+            with torch.no_grad():
+                out = mdl(**enc, output_hidden_states=True)
+            # 取最后一层 hidden_states；(B, L, H)
+            # pooling 统一在 float32 做以避免 float16 与 mask dtype 不匹配
+            hs = out.hidden_states[-1].float()
+            mask = enc["attention_mask"].unsqueeze(-1).float()
+            summed = (hs * mask).sum(dim=1)
+            counts = mask.sum(dim=1).clamp(min=1e-9)
+            pooled = summed / counts
+            norms = torch.nn.functional.normalize(pooled, p=2, dim=1)
+            all_norms.extend(norms.cpu().tolist())
+        return all_norms
