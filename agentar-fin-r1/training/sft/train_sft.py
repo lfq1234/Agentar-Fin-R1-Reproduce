@@ -28,19 +28,16 @@ NPROC = int(os.environ.get("NPROC", "1"))
 # 与旧 ms-swift 版映射：
 #   tuner_type=lora + lora_rank=64 + lora_alpha=128 + target_modules=all-linear
 #     → model.lora_rank / model.lora_alpha / model.target_modules
-#   learning_rate=1e-4         → optim.lr
-#   num_train_epochs=3         → trainer.total_epochs
+#   learning_rate=1e-5         → optim.lr
+#   num_train_epochs=2         → trainer.total_epochs
 #   max_length=8192            → data.max_length
 SFT_OVERRIDES = [
     f"data.train_files={SFT_DATA}",
-    f"data.val_files={SFT_DATA}",
     "data.micro_batch_size_per_gpu=1",
     "data.messages_key=messages",
     "data.max_length=8192",
-    "optim.lr=1e-4",
+    "optim.lr=1e-5",
     "optim.lr_warmup_steps=50",
-    "engine=fsdp",
-    "engine.ulysses_sequence_parallel_size=1",
     f"model.path={MODEL_PATH}",
     "model.use_remove_padding=true",
     "model.lora_rank=64",
@@ -49,7 +46,7 @@ SFT_OVERRIDES = [
     "model.torch_dtype=bfloat16",
     "model.use_gradient_checkpointing=true",
     f"trainer.default_local_dir={SAVE_PATH}",
-    "trainer.total_epochs=3",
+    "trainer.total_epochs=2",
     'trainer.logger=["console"]',
 ]
 
