@@ -94,42 +94,77 @@ def _parse_extra_info(extra_info) -> dict:
 
 
 # ============================================================================
+# 工具：拆分模型响应中的 thinking 和 output
+# ============================================================================
+def _split_response(response: str) -> tuple[str, str]:
+    """从模型响应中拆分 thinking 和 output。"""
+    m = re.search(r"<think>(.*?)</think>(.*)", response, re.DOTALL)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", response.strip()
+
+
+# ============================================================================
 # RLAIF：裁判按 rubric 打分 → 加权聚合为 0~1
 # ============================================================================
-_RUBRIC_DESC = "\n".join(
-    f"- {k}: {desc}（权重 {w:.2f}）"
-    for (k, w), desc in zip(
-        RUBRIC,
-        [
-            "结论是否与参考答案一致、事实与计算是否准确",
-            "推理链是否完整、逻辑自洽、与标准思维链对标",
-            "是否体现风险/合规意识、避免误导性陈述",
-            "是否清晰结构化、符合 <think>/<answer> 或 \\boxed{} 约定",
-        ],
+_RUBRIC_DESC = {
+    "reasoning": "推理链是否完整、逻辑自洽、与标准思维链对标（仅对比思维链，不看答案）",
+    "correctness": "结论是否与参考答案一致、事实与计算是否准确（仅对比答案，不看推理）",
+    "compliance_risk": "是否体现风险/合规意识、避免误导性陈述",
+    "clarity_format": "是否清晰结构化、符合 <think>/<answer> 或 \\boxed{} 约定",
+}
+
+
+def _make_judge_prompt(
+    question: str,
+    gold_thinking: str, model_thinking: str,
+    gold_output: str, model_output: str,
+) -> str:
+    """构造裁判 prompt：推理链对标推理链，答案对标答案。"""
+    parts = []
+    if question:
+        parts.append(f"[Question]\n{question}")
+
+    # reasoning 维度：只喂思维链，裁判不看答案
+    parts.append(
+        f"[Reasoning comparison — score the 'reasoning' dimension only]\n"
+        f"Gold thinking:\n{gold_thinking}\n\n"
+        f"Model thinking:\n{model_thinking}"
     )
-)
+
+    # 其余三维度：只喂答案部分，裁判不看推理
+    parts.append(
+        f"[Output comparison — score 'correctness', 'compliance_risk', 'clarity_format']\n"
+        f"Gold output:\n{gold_output}\n\n"
+        f"Model output:\n{model_output}"
+    )
+
+    rubric_lines = [
+        f"- {k}（权重 {w:.2f}）: {_RUBRIC_DESC[k]}"
+        for k, w in RUBRIC
+    ]
+    parts.append(
+        f"Rubric (score each dimension 0-10, higher is better):\n"
+        + "\n".join(rubric_lines)
+        + f'\n\nReturn ONLY JSON: {{"dimensions": {{"correctness": x, '
+        f'"reasoning": x, "compliance_risk": x, "clarity_format": x}}, '
+        f'"rationale": "..."}}'
+    )
+    return "\n\n".join(parts)
 
 
 def _rlaif_rubric_score(
-    question: str, response: str,
-    gold_output: str, gold_thinking: str,
+    question: str,
+    gold_thinking: str, model_thinking: str,
+    gold_output: str, model_output: str,
 ) -> float:
-    """外部金融裁判按 rubric 给各维度 0~10 分，代码加权聚合成 0~1。
+    """外部金融裁判按 rubric 给各维度 0~10 分，推理和答案分开对标。
 
     任何异常（无服务/解析失败）→ 0.0，不污染训练。
     """
-    prompt_parts = []
-    if question:
-        prompt_parts.append(f"[Question]\n{question}")
-    prompt_parts.append(f"[Gold thinking / reference reasoning]\n{gold_thinking}")
-    prompt_parts.append(f"[Gold output / correct answer]\n{gold_output}")
-    prompt_parts.append(f"[Assistant answer to evaluate]\n{response}")
-    prompt_parts.append(
-        f"Rubric (score each dimension 0-10, higher is better):\n{_RUBRIC_DESC}\n\n"
-        f'Return ONLY JSON: {{"dimensions": {{"correctness": x, "reasoning": x, '
-        f'"compliance_risk": x, "clarity_format": x}}, "rationale": "..."}}'
+    prompt = _make_judge_prompt(
+        question, gold_thinking, model_thinking, gold_output, model_output,
     )
-    prompt = "\n\n".join(prompt_parts)
 
     try:
         resp = requests.post(
@@ -184,16 +219,22 @@ def _parse_rubric_scores(content: str) -> dict:
 # 主入口：格式闸门 → RLAIF rubric 打分（verl 逐样本调用）
 # ============================================================================
 def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> float:
-    """Agentar-Fin-R1 奖励：格式闸门 → RLAIF rubric 加权打分。"""
+    """Agentar-Fin-R1 奖励：格式闸门 → RLAIF rubric 加权打分。
+
+    reasoning 维度只喂思维链对比，其余三维度只喂答案部分对比。
+    """
     # Step 1 · 格式不合格 → 0 分
     if not _has_valid_format(solution_str):
         return 0.0
 
-    # Step 2 · RLAIF：裁判按 rubric 对格式合格的回答打分（0~1）
+    # Step 2 · 拆分模型响应 & 解析参考信息
+    model_thinking, model_output = _split_response(solution_str)
     ref = _parse_extra_info(extra_info)
+
     return _rlaif_rubric_score(
         question=ref.get("question", ""),
-        response=solution_str,
         gold_thinking=ref.get("gold_thinking", ""),
+        model_thinking=model_thinking,
         gold_output=ref.get("gold_output", ""),
+        model_output=model_output,
     )
