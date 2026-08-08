@@ -84,7 +84,8 @@ def _build_messages(result: Any) -> list[dict[str, Any]]:
         content = step.get("content", "")
         messages.append({
             "role": "agent",
-            "agent": meta["name"],
+            # AgentScope 名字键（如 BankingExpert），前端按 AGENT_DISPLAY 映射中文名+头像。
+            "agent": agent_key,
             "avatar": meta["avatar"],
             "type": step.get("type", ""),
             "content": f"{content}\n\n@{next_name}".strip(),
@@ -97,7 +98,8 @@ def _build_messages(result: Any) -> list[dict[str, Any]]:
             meta = _agent_meta("review")
             messages.append({
                 "role": "agent",
-                "agent": meta["name"],
+                # 用 AgentScope 名字键 ComplianceReviewer（与前端 AGENT_DISPLAY 对齐）
+                "agent": "ComplianceReviewer",
                 "avatar": meta["avatar"],
                 "type": "review",
                 "content": f"{note}\n\n@{_mention_name('risk')}".strip(),
@@ -108,7 +110,7 @@ def _build_messages(result: Any) -> list[dict[str, Any]]:
             meta = _agent_meta("risk")
             messages.append({
                 "role": "agent",
-                "agent": meta["name"],
+                "agent": "RiskController",
                 "avatar": meta["avatar"],
                 "type": "risk",
                 "content": f"{flag}\n\n@{_mention_name('Coordinator')}".strip(),
@@ -125,7 +127,8 @@ def _build_messages(result: Any) -> list[dict[str, Any]]:
     final_meta = _agent_meta(final_agent_key)
     messages.append({
         "role": "assistant",
-        "agent": final_meta["name"],
+        # AgentScope 名字键（Direct / Coordinator），前端映射出"谁综合作答"。
+        "agent": final_agent_key,
         "avatar": final_meta["avatar"],
         "type": "final",
         "content": getattr(result, "reply", ""),

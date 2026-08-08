@@ -107,26 +107,29 @@ export interface ChatSession {
 
 // ===== 02 · 多智能体参与者（前端契约，镜像 backend/02 框架） =====
 
-// 后端专家 → 前端展示名 / 头像。Direct 通道无 trace 时退化为 [["Agentar","🤖"]]。
-export const AGENT_DISPLAY: Record<string, { name: string; avatar: string }> = {
-  Coordinator: { name: "协调者", avatar: "🤖" },
-  Agentar: { name: "Agentar", avatar: "🤖" },
-  Direct: { name: "Agentar", avatar: "🤖" },
-  rag: { name: "资料检索", avatar: "🔍" },
-  RAGRetriever: { name: "资料检索", avatar: "🔍" },
-  BankingExpert: { name: "银行专家", avatar: "🏦" },
-  SecuritiesExpert: { name: "证券专家", avatar: "📈" },
-  InsuranceExpert: { name: "保险专家", avatar: "🛡️" },
-  TrustExpert: { name: "信托专家", avatar: "🏛️" },
-  MutualFundsExpert: { name: "基金专家", avatar: "🧺" },
-  ComplianceReviewer: { name: "合规审核", avatar: "✅" },
-  RiskController: { name: "风控", avatar: "⚠️" },
+// 后端专家 → 前端展示名 / 头像 / 主题色。后端 agent 字段统一为 AgentScope 名字键
+// （如 BankingExpert / Coordinator / Direct），前端按名字映射展示。Direct 通道无
+// trace 时退化为 Agentar。color 用于圆形头像底色，让不同智能体一眼可区分。
+export const AGENT_DISPLAY: Record<string, { name: string; avatar: string; color: string }> = {
+  Coordinator: { name: "协调者", avatar: "🤖", color: "#6366f1" },
+  Agentar: { name: "Agentar", avatar: "🤖", color: "#2563eb" },
+  Direct: { name: "Agentar", avatar: "🤖", color: "#2563eb" },
+  rag: { name: "资料检索", avatar: "🔍", color: "#0ea5e9" },
+  RAGRetriever: { name: "资料检索", avatar: "🔍", color: "#0ea5e9" },
+  BankingExpert: { name: "银行专家", avatar: "🏦", color: "#16a34a" },
+  SecuritiesExpert: { name: "证券专家", avatar: "📈", color: "#dc2626" },
+  InsuranceExpert: { name: "保险专家", avatar: "🛡️", color: "#0891b2" },
+  TrustExpert: { name: "信托专家", avatar: "🏛️", color: "#7c3aed" },
+  MutualFundsExpert: { name: "基金专家", avatar: "🧺", color: "#ca8a04" },
+  ComplianceReviewer: { name: "合规审核", avatar: "✅", color: "#059669" },
+  RiskController: { name: "风控", avatar: "⚠️", color: "#ea580c" },
 };
 
 export interface Participant {
   key: string; // 与后端 agent_key 对齐（用于查 AGENT_DISPLAY）
   name: string;
   avatar: string;
+  color: string;
 }
 
 // ===== 03 · 个人文档与知识图谱（前端契约，镜像 backend/03 接口） =====

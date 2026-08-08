@@ -255,7 +255,7 @@ async def run(
                     expert, Msg(name="user", content=expert_prompt, role="user")
                 )
                 trace.append(
-                    {"agent": scene, "type": "expert_opinion", "content": draft, "meta": {"scene": scene}}
+                    {"agent": expert.name, "type": "expert_opinion", "content": draft, "meta": {"scene": scene}}
                 )
                 revise_role = expert
 
