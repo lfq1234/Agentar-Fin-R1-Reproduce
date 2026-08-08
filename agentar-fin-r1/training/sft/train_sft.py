@@ -28,7 +28,7 @@ NPROC = int(os.environ.get("NPROC", "1"))
 # 与旧 ms-swift 版映射：
 #   tuner_type=lora + lora_rank=64 + lora_alpha=128 + target_modules=all-linear
 #     → model.lora_rank / model.lora_alpha / model.target_modules
-#   learning_rate=1e-5         → optim.lr
+#   learning_rate=5e-5         → optim.lr
 #   num_train_epochs=2         → trainer.total_epochs
 #   max_length=8192            → data.max_length
 SFT_OVERRIDES = [
@@ -36,8 +36,10 @@ SFT_OVERRIDES = [
     "data.micro_batch_size_per_gpu=4",
     "data.messages_key=messages",
     "data.max_length=4096",
-    "optim.lr=1e-5",
-    "optim.lr_warmup_steps=1500",
+    "optim.lr=5e-5",
+    "optim.lr_warmup_steps=1000",
+    "optim.weight_decay=0.01",
+    "optim.lr_scheduler=cosine",
     f"model.path={MODEL_PATH}",
     "model.use_remove_padding=true",
     "model.lora_rank=64",
