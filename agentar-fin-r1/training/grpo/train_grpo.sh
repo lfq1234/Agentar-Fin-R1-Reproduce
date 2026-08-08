@@ -3,7 +3,7 @@
 # Agentar-Fin-R1 — Stage 2 GRPO (verl)
 # ----------------------------------------------------------------------------
 # 在 Stage 1 merge 后的完整模型（outputs/sft_merged）上做 GRPO 强化学习攻坚。
-# 基座 Qwen3-8B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
+# 基座 Qwen3.5-9B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
 # 外部 DeepSeek V4 Flash API 裁判（fin_judge_reward.py，走 OpenAI 兼容 /v1）。
 #
 # 与旧 ms-swift 版等价映射：

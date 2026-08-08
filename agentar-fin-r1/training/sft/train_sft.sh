@@ -1,22 +1,35 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Agentar-Fin-R1 — Stage 1 SFT (verl) 启动壳
+# Agentar-Fin-R1 — Stage 1 SFT (verl) 两阶段启动壳
 # ----------------------------------------------------------------------------
-# 仅负责设置路径环境变量，然后调用 train_sft.py（超参在此文件中持有）。
-# 真正的训练逻辑见同目录 train_sft.py。
+# Phase 1: 数据预处理（原始 JSON/JSONL → verl parquet）
+# Phase 2: SFT 训练
 #
 # 用法：
-#   NPROC=1 MODEL_PATH=Qwen/Qwen3-8B SFT_DATA=./data/verl/sft.parquet \
+#   # 一键：原始数据 → 预处理 → 训练
+#   RAW_DATA=./data/raw/train.json bash training/sft/train_sft.sh
+#
+#   # 已有 parquet，跳过预处理直接训练
+#   SFT_DATA=./data/verl/sft.parquet bash training/sft/train_sft.sh
+#
+#   # 指定本地模型
+#   NPROC=4 MODEL_PATH=./Qwen3.5-9B RAW_DATA=./data/raw/train.json \
 #     bash training/sft/train_sft.sh
-# 产物 → ./outputs/sft_lora_adapter
 # ============================================================================
 set -xeuo pipefail
 
-# —— 路径环境变量（可被外部覆盖） ——
-export MODEL_PATH=${MODEL_PATH:-Qwen/Qwen3-8B}
-export SFT_DATA=${SFT_DATA:-./data/verl/sft.parquet}
-export SAVE_PATH=${SAVE_PATH:-./outputs/sft_lora_adapter}
-export NPROC=${NPROC:-1}
+SCRIPT_DIR="$(dirname "$0")"
 
-# —— 调用 python 启动器（超参在 train_sft.py 中） ——
-python "$(dirname "$0")/train_sft.py"
+# ---- Phase 1: 数据预处理（若指定了 RAW_DATA） ----
+if [ -n "${RAW_DATA:-}" ]; then
+    export SFT_DATA="${SFT_DATA:-./data/verl/sft.parquet}"
+    echo "[train_sft.sh] Phase 1: 数据预处理  $RAW_DATA → $SFT_DATA"
+    python "$SCRIPT_DIR/prepare_sft_data.py" \
+        --input "$RAW_DATA" \
+        --output "$SFT_DATA"
+    echo "[train_sft.sh] Phase 1: 完成 → $SFT_DATA"
+fi
+
+# ---- Phase 2: SFT 训练 ----
+echo "[train_sft.sh] Phase 2: SFT 训练  data=$SFT_DATA  model=${MODEL_PATH:-./Qwen3.5-9B}"
+python "$SCRIPT_DIR/train_sft.py"

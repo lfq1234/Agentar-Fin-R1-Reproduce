@@ -12,19 +12,19 @@
 # 又把可调项集中在一处。等价于原 train_sft.sh 的 torchrun 调用。
 #
 # 运行：
-#   NPROC=1 MODEL_PATH=Qwen/Qwen3-8B SFT_DATA=./data/verl/sft.parquet \
+#   NPROC=1 MODEL_PATH=./Qwen3.5-9B SFT_DATA=./data/verl/sft.parquet \
 #     python training/sft/train_sft.py
 # ============================================================================
 import os
 import sys
 
 # ---- 路径（可被环境变量覆盖，默认值与 train_sft.sh 一致） ----
-MODEL_PATH = os.environ.get("MODEL_PATH", "Qwen/Qwen3-8B")
+MODEL_PATH = os.environ.get("MODEL_PATH", "./Qwen3.5-9B")
 SFT_DATA = os.environ.get("SFT_DATA", "./data/verl/sft.parquet")
-SAVE_PATH = os.environ.get("SAVE_PATH", "./outputs/sft_lora_adapter")
+SAVE_PATH = os.environ.get("SAVE_PATH", "./training/sft/outputs")
 NPROC = int(os.environ.get("NPROC", "1"))
 
-# ---- Stage 1 SFT 超参：Qwen3-8B + LoRA(r=64, alpha=128, all-linear)，FSDP ----
+# ---- Stage 1 SFT 超参：Qwen3.5-9B + LoRA(r=64, alpha=128, all-linear)，FSDP ----
 # 与旧 ms-swift 版映射：
 #   tuner_type=lora + lora_rank=64 + lora_alpha=128 + target_modules=all-linear
 #     → model.lora_rank / model.lora_alpha / model.target_modules
@@ -36,7 +36,6 @@ SFT_OVERRIDES = [
     f"data.val_files={SFT_DATA}",
     "data.micro_batch_size_per_gpu=1",
     "data.messages_key=messages",
-    "data.ignore_input_ids_mismatch=True",
     "data.max_length=8192",
     "optim.lr=1e-4",
     "optim.lr_warmup_steps=50",

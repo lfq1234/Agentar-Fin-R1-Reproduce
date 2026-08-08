@@ -3,7 +3,7 @@
 本目录是 **verl 0.8.0** 版的两阶段训练实现。原 ms-swift 版（SFT/GRPO）已删除，仅保留 verl。
 决策背景见根 `report.md` 与 `../../.workbuddy/memory/`：ms-swift 在 GRPO 阶段
 rollout 用 `transformers.generate`、reward 同步阻塞，verl 用 vLLM rollout + Ray 式
-流水线，对本项目（Qwen3-8B + K=8 + 外部 DeepSeek V4 Flash 裁判）是「代差级」提速。
+流水线，对本项目（Qwen3.5-9B + K=8 + 外部 DeepSeek V4 Flash 裁判）是「代差级」提速。
 
 ## 目录结构
 
@@ -12,35 +12,26 @@ training/
 ├── README.md
 ├── sft/
 │   ├── train_sft.py              # Stage 1 超参持有 + 训练启动器（调用 verl.trainer.sft_trainer）
-│   └── train_sft.sh              # Stage 1 壳：设路径环境变量后调用 train_sft.py
+│   ├── train_sft.sh              # Stage 1 两阶段壳（预处理 → 训练）
+│   └── prepare_sft_data.py       # 原始对话 JSON/JSONL → verl parquet
 ├── grpo/
 │   ├── train_grpo.sh             # Stage 2：GRPO（vLLM rollout + LoRA r=32）
 │   └── fin_judge_reward.py       # 奖励：compute_score（格式闸门 → RLAIF 按 rubric 加权打分 0~1）
 ├── merge_lora.py                 # 合并 SFT LoRA → 完整 checkpoint
-└── data/
-    └── prepare_verl_data.py      # golden.jsonl / DeepFinance-100K → verl parquet
 ```
 
 ## 运行顺序
 
 ```bash
-# 0) 准备数据（一次）
-python training/data/prepare_verl_data.py \
-    --input ./data/golden/golden.jsonl --out-dir ./data/verl
-# 或 DeepFinance-100K 本地副本：
-#   --input /path/to/deepfinance.parquet
-
-# 1) Stage 1 SFT
-NPROC=1 MODEL_PATH=Qwen/Qwen3-8B \
-    SFT_DATA=./data/verl/sft.parquet \
-    bash training/sft/train_sft.sh
-# 或直接：
-#   python training/sft/train_sft.py
+# 1) Stage 1 SFT（一键：原始数据 → 预处理 → 训练）
+RAW_DATA=./data/raw/train.json bash training/sft/train_sft.sh
+# 或已有 parquet，跳过预处理：
+#   SFT_DATA=./data/verl/sft.parquet bash training/sft/train_sft.sh
 # 产物 → ./outputs/sft_lora_adapter
 
 # 2) 合并 SFT LoRA
 python training/merge_lora.py \
-    --base Qwen/Qwen3-8B \
+    --base ./Qwen3.5-9B \
     --adapter ./outputs/sft_lora_adapter \
     --output ./outputs/sft_merged
 
@@ -112,7 +103,7 @@ custom_reward_function.name=compute_score
 2. **merge 兼容性**：`merge_lora.py` 假设 verl SFT LoRA 输出是 peft 兼容格式。
    若你的 verl 版本把 LoRA 存成非 peft 格式，改用「SFT 全参 + GRPO 自带 LoRA」
    路径，跳过 merge。
-3. **显存**：8B + LoRA + K=8 + seq 4096 在 24G 卡上偏紧。`rollout.gpu_memory_utilization=0.5`
+3. **显存**：9B + LoRA + K=8 + seq 4096 在 24G 卡上偏紧。`rollout.gpu_memory_utilization=0.5`
    可下调；多卡把 `rollout.tensor_model_parallel_size` / `NPROC` 调大。
 4. **裁判服务**：`fin_judge_reward.py` 走 **外部 DeepSeek V4 Flash API**（OpenAI 兼容 /v1），
    通过环境变量注入：`JUDGE_BASE_URL`（默认 `https://api.deepseek.com/v1`）、
