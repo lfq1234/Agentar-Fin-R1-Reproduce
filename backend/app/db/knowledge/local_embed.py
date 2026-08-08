@@ -39,24 +39,45 @@ def _resolve_model_path() -> str:
 
 def _load() -> None:
     global _MODEL, _TOKENIZER, _DEVICE
-    import torch
-    from transformers import AutoModel, AutoTokenizer
 
     path = _resolve_model_path()
-    if os.path.isdir(path):
-        # 本地目录：直接加载（允许联网回退）
-        tok = AutoTokenizer.from_pretrained(path)
-        mdl = AutoModel.from_pretrained(path)
-    else:
-        # HF repo id：离线优先从缓存加载，避免无网时尝试下载卡死
-        tok = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        mdl = AutoModel.from_pretrained(path, local_files_only=True)
-    mdl.eval()
+    # 优先复用 01 LocalTransformerModel 已加载的共享权重（同路径只存一份），
+    # 避免 LLM 与嵌入器各加载一份 Qwen3-0.6B 导致显存/虚拟内存溢出。
+    try:
+        from app.model.local.transformer_local import _SHARED_LOADED
+
+        cached = _SHARED_LOADED.get(path)
+        if cached is not None:
+            _DEVICE, _TOKENIZER, _MODEL = cached
+            return
+    except Exception:
+        cached = None
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    if os.path.isdir(path):
+        tok = AutoTokenizer.from_pretrained(path)
+        mdl = AutoModelForCausalLM.from_pretrained(path, dtype=dtype)
+    else:
+        tok = AutoTokenizer.from_pretrained(path, local_files_only=True)
+        mdl = AutoModelForCausalLM.from_pretrained(
+            path, local_files_only=True, dtype=dtype
+        )
+    mdl.eval()
     mdl.to(device)
     _TOKENIZER = tok
     _MODEL = mdl
     _DEVICE = device
+    # 注册到共享缓存，供 LLM 后续复用。
+    try:
+        from app.model.local.transformer_local import _SHARED_LOADED
+
+        _SHARED_LOADED[path] = (_DEVICE, _TOKENIZER, _MODEL)
+    except Exception:
+        pass
 
 
 def get_local_embedder():
@@ -87,9 +108,11 @@ class _LocalEmbedder:
         )
         enc = {k: v.to(_DEVICE) for k, v in enc.items()}
         with torch.no_grad():
-            out = mdl(**enc)
-        # last_hidden_state: (B, L, H)；attention_mask: (B, L)
-        hs = out.last_hidden_state
+            out = mdl(**enc, output_hidden_states=True)
+        # AutoModelForCausalLM 返回所有层 hidden_states，取最后一层；(B, L, H)
+        # attention_mask: (B, L)。pooling 统一在 float32 做以避免 float16 与 mask
+        # 的 dtype 不匹配，同时保证数值稳定。
+        hs = out.hidden_states[-1].float()
         mask = enc["attention_mask"].unsqueeze(-1).float()
         summed = (hs * mask).sum(dim=1)
         counts = mask.sum(dim=1).clamp(min=1e-9)

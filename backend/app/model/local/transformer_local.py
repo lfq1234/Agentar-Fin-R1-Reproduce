@@ -16,11 +16,20 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from app.model.base import ModelConfig, ModelInterface
 from app.model.exceptions import ModelInvokeError
 
 _DEFAULT_MODEL_PATH = "D:/models/Qwen3-0.6B"
+
+# 进程内共享缓存：同一路径的本地模型只加载一次，供 LLM 推理与嵌入复用，
+# 避免 Qwen3-0.6B 被加载两份导致显存/虚拟内存溢出。
+_SHARED_LOADED: dict[str, tuple[str, Any, Any]] = {}
+
+
+class _ModelLoadError(ModelInvokeError):
+    pass
 
 
 class LocalTransformerModel(ModelInterface):
@@ -43,7 +52,12 @@ class LocalTransformerModel(ModelInterface):
 
     @staticmethod
     def _load(model_path: str):
-        """延迟加载 torch / transformers 并载入本地权重。"""
+        """延迟加载 torch / transformers 并载入本地权重；同路径只加载一次并共享。"""
+        cached = _SHARED_LOADED.get(model_path)
+        if cached is not None:
+            print(f"[LocalTransformerModel] reuse cached {model_path}", flush=True)
+            return cached
+
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -71,7 +85,9 @@ class LocalTransformerModel(ModelInterface):
                 f"LocalTransformerModel 加载权重失败（path={model_path}）: {exc}"
             ) from exc
         print(f"[LocalTransformerModel] loaded device={device}", flush=True)
-        return device, tokenizer, model
+        cached = (device, tokenizer, model)
+        _SHARED_LOADED[model_path] = cached
+        return cached
 
     def build_agentscope_config(self) -> dict:
         """导出 AgentScope openai_chat 配置（供 services/ 编排复用）。
