@@ -1,6 +1,6 @@
 """Agentar-Fin-R1 GRPO 奖励函数 — RLAIF + rubric（verl 0.8.0）。
 
-Step 1 · 格式闸门：<think>…</think> + (\boxed{} 或 <answer>…) 缺一 → 0。
+Step 1 · 格式闸门：必须有 <think>…</think>，缺 → 0。
 Step 2 · RLAIF：外部 DeepSeek V4 Flash 按 4 维 rubric 打分，加权聚合 0~1。
   correctness 0.40 / reasoning 0.30 / compliance_risk 0.15 / clarity_format 0.15
 
@@ -26,7 +26,7 @@ RUBRIC = [
     ("correctness", 0.40, "结论是否与参考答案一致、事实与计算是否准确（仅对比答案，不看推理）"),
     ("reasoning", 0.30, "推理链是否完整、逻辑自洽、与标准思维链对标（仅对比思维链，不看答案）"),
     ("compliance_risk", 0.15, "是否体现风险/合规意识、避免误导性陈述"),
-    ("clarity_format", 0.15, "是否清晰结构化、符合 <think>/<answer> 或 \\boxed{} 约定"),
+    ("clarity_format", 0.15, "是否清晰结构化、表达规范"),
 ]
 RUBRIC_KEYS = [k for k, _, _ in RUBRIC]
 
@@ -34,11 +34,7 @@ RUBRIC_KEYS = [k for k, _, _ in RUBRIC]
 # ---- 工具函数 ----
 
 def _has_valid_format(response: str) -> bool:
-    has_think = "<think>" in response and "</think>" in response
-    has_answer = ("\\boxed{" in response) or (
-        "<answer>" in response and "</answer>" in response
-    )
-    return has_think and has_answer
+    return "<think>" in response and "</think>" in response
 
 
 def _split_response(response: str) -> tuple[str, str]:
