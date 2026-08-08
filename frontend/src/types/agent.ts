@@ -17,11 +17,22 @@ export interface ChatMessage {
   type?: string;
 }
 
+export interface AgentTraceStep {
+  agent: string;
+  // route / rag / expert_opinion / synthesize / revise
+  type: string;
+  content?: string | null;
+  meta?: Record<string, unknown> | null;
+}
+
 export interface ChatResponse {
   conversation_id?: number | null;
   reply: string;
   compliance_notes: string[];
   risk_flags: string[];
+  // 02：多人编排每步（Coordinator 路由/各专家意见/合成/回写），前端用于
+  // 把"是哪位/哪些智能体参与的"显示给用户，对应后端 ChatResponse.agent_trace。
+  agent_trace?: AgentTraceStep[];
   messages?: ChatMessage[];
 }
 
@@ -46,6 +57,9 @@ export interface UiMessage {
   type?: string;
   compliance?: string[];
   risk?: string[];
+  // 02：本轮参与的所有智能体（从 res.agent_trace 去重抽取，
+  // Direct 通道为空时退化为 ["Agentar"]）；用于在 assistant 气泡下方显示。
+  participants?: string[];
 }
 
 export type BackendStatus = "unknown" | "ok" | "down";
@@ -89,6 +103,30 @@ export interface ChatSession {
   conversationId: number | null;
   createdAt: number;
   updatedAt: number;
+}
+
+// ===== 02 · 多智能体参与者（前端契约，镜像 backend/02 框架） =====
+
+// 后端专家 → 前端展示名 / 头像。Direct 通道无 trace 时退化为 [["Agentar","🤖"]]。
+export const AGENT_DISPLAY: Record<string, { name: string; avatar: string }> = {
+  Coordinator: { name: "协调者", avatar: "🤖" },
+  Agentar: { name: "Agentar", avatar: "🤖" },
+  Direct: { name: "Agentar", avatar: "🤖" },
+  rag: { name: "资料检索", avatar: "🔍" },
+  RAGRetriever: { name: "资料检索", avatar: "🔍" },
+  BankingExpert: { name: "银行专家", avatar: "🏦" },
+  SecuritiesExpert: { name: "证券专家", avatar: "📈" },
+  InsuranceExpert: { name: "保险专家", avatar: "🛡️" },
+  TrustExpert: { name: "信托专家", avatar: "🏛️" },
+  MutualFundsExpert: { name: "基金专家", avatar: "🧺" },
+  ComplianceReviewer: { name: "合规审核", avatar: "✅" },
+  RiskController: { name: "风控", avatar: "⚠️" },
+};
+
+export interface Participant {
+  key: string; // 与后端 agent_key 对齐（用于查 AGENT_DISPLAY）
+  name: string;
+  avatar: string;
 }
 
 // ===== 03 · 个人文档与知识图谱（前端契约，镜像 backend/03 接口） =====

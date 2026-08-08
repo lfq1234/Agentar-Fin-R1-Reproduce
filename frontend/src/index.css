@@ -336,6 +336,48 @@ body {
   color: var(--warn);
 }
 
+/* 02 · "本轮参与者" chip 行（assistant 气泡尾部）。
+   复用 .agent-mention 圆角风格，但更小、更轻量，避免抢走主气泡视觉。 */
+.participants-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.participants-label {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  letter-spacing: 0.02em;
+  margin-right: 2px;
+}
+.participants-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--active-bg, #eff6ff);
+  border: 1px solid var(--active-border, #bfdbfe);
+  font-size: 12px;
+  color: var(--primary, #2563eb);
+  line-height: 1.4;
+}
+.participant-avatar {
+  font-size: 12px;
+}
+.participant-name {
+  font-weight: 500;
+}
+
 /* Composer */
 .composer {
   display: flex;

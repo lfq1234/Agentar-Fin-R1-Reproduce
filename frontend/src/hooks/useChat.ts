@@ -9,6 +9,7 @@ import {
   type ApiError,
 } from "../api/client";
 import type {
+  AgentTraceStep,
   AnalyzeRequest,
   AnalyzeResponse,
   BackendStatus,
@@ -54,6 +55,22 @@ function metaToSession(meta: SessionMeta): ChatSession {
 }
 
 // 07：后端历史消息 → 前端 UiMessage（老数据可能不带 agent/avatar，降级为纯文本展示）。
+// 02：trace 抽取本轮参与智能体（去重、保序）。
+// Direct 通道（trace 空）退化为 ["Agentar"]，让用户至少能看到「是谁答的」。
+function participantsFromTrace(trace: AgentTraceStep[] | undefined | null): string[] {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const s of trace || []) {
+    const k = s.agent;
+    if (k && !seen.has(k)) {
+      seen.add(k);
+      list.push(k);
+    }
+  }
+  // 直答通道无 trace：标注为 Agentar
+  return list.length === 0 ? ["Agentar"] : list;
+}
+
 function historyMsgToUiMessage(m: {
   role: "user" | "assistant" | "agent";
   content: string;
@@ -146,12 +163,15 @@ export function useChat() {
       const res = await chat(req);
       const newConversationId = res.conversation_id ?? null;
       const newBackendId = newConversationId != null ? String(newConversationId) : sid;
+      const participants = participantsFromTrace(res.agent_trace);
       setCurrentSessionId(newBackendId);
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sid) return s;
           // 02 多人对话：后端返回 messages 时，按顺序渲染每个智能体气泡；
           // 未返回时退化为旧版单条助手回复。
+          // 任意通道下，最终助手（assistant）消息都带上「本轮参与者」，让
+          // Direct 直答与 Multi 圆桌两种模式都能在前端看出"是哪些智能体干的"。
           const replyMessages: UiMessage[] =
             res.messages && res.messages.length > 0
               ? res.messages.map((m) =>
@@ -160,6 +180,7 @@ export function useChat() {
                         ...m,
                         compliance: res.compliance_notes,
                         risk: res.risk_flags,
+                        participants,
                       }
                     : { ...m },
                 )
@@ -169,6 +190,7 @@ export function useChat() {
                     content: res.reply,
                     compliance: res.compliance_notes,
                     risk: res.risk_flags,
+                    participants,
                   },
                 ];
           const history: UiMessage[] = [...s.history, ...replyMessages];
