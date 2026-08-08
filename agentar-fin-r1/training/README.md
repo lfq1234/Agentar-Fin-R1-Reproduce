@@ -15,8 +15,9 @@ training/
 │   ├── train_sft.sh              # Stage 1 两阶段壳（预处理 → 训练）
 │   └── prepare_sft_data.py       # 原始对话 JSON/JSONL → verl parquet
 ├── grpo/
-│   ├── train_grpo.sh             # Stage 2：GRPO（vLLM rollout + LoRA r=32）
-│   └── fin_judge_reward.py       # 奖励：compute_score（格式闸门 → RLAIF 按 rubric 加权打分 0~1）
+│   ├── train_grpo.sh             # Stage 2 两阶段壳（预处理 → GRPO 训练）
+│   ├── prepare_grpo_data.py       # 原始对话 JSON/JSONL → verl GRPO parquet
+│   └── fin_judge_reward.py        # 奖励：compute_score（格式闸门 → RLAIF 按 rubric 加权打分 0~1）
 ├── merge_lora.py                 # 合并 SFT LoRA → 完整 checkpoint
 ```
 
@@ -27,24 +28,22 @@ training/
 RAW_DATA=./data/raw/train.json bash training/sft/train_sft.sh
 # 或已有 parquet，跳过预处理：
 #   SFT_DATA=./data/verl/sft.parquet bash training/sft/train_sft.sh
-# 产物 → ./outputs/sft_lora_adapter
+# 产物 → ./training/sft/outputs
 
 # 2) 合并 SFT LoRA
 python training/merge_lora.py \
     --base ./Qwen3.5-9B \
-    --adapter ./outputs/sft_lora_adapter \
-    --output ./outputs/sft_merged
+    --adapter ./training/sft/outputs \
+    --output ./training/sft/merged
 
 # 3) 配置裁判（外部 DeepSeek V4 Flash API，OpenAI 兼容 /v1）
 #    export JUDGE_API_KEY=<你的 DeepSeek API key>
-#    # 可选：export JUDGE_MODEL=deepseek-v4-flash / export JUDGE_BASE_URL=https://api.deepseek.com/v1
-#    无需本地部署 72B，训练机显存全部留给 actor（A800 八卡）。
 
-# 4) Stage 2 GRPO
-NPROC=1 SFT_MERGED=./outputs/sft_merged \
-    GRPO_DATA=./data/verl/grpo.parquet \
-    bash training/grpo/train_grpo.sh
-# 产物 → ./outputs/grpo_lora_adapter
+# 4) Stage 2 GRPO（一键：原始数据 → 预处理 → 训练）
+RAW_DATA=./data/raw/train.json bash training/grpo/train_grpo.sh
+# 或已有 parquet，跳过预处理：
+#   GRPO_DATA=./data/verl/grpo.parquet bash training/grpo/train_grpo.sh
+# 产物 → ./training/grpo/outputs
 ```
 
 ## 与 ms-swift 版的关键差异

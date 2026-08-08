@@ -2,7 +2,7 @@
 
 verl SFT（verl.trainer.sft_trainer + model.lora_rank）产出的 adapter 目录为
 peft 兼容格式（adapter_config.json + adapter_model.safetensors）。本脚本用 peft
-把它 merge 回基座，得到完整 checkpoint（outputs/sft_merged），作为 Stage 2 GRPO
+把它 merge 回基座，得到完整 checkpoint（training/sft/merged），作为 Stage 2 GRPO
 的初始策略——等价于旧 ms-swift 版的 swift export 流程。
 
 前提：verl SFT 输出是标准 peft adapter。若 verl 版本把 LoRA 存成非 peft 格式，
@@ -12,8 +12,8 @@ peft 兼容格式（adapter_config.json + adapter_model.safetensors）。本脚�
 用法：
     python training/merge_lora.py \
         --base ./Qwen3.5-9B \
-        --adapter ./outputs/sft_lora_adapter \
-        --output ./outputs/sft_merged
+        --adapter ./training/sft/outputs \
+        --output ./training/sft/merged
 """
 
 import argparse
@@ -25,8 +25,8 @@ from transformers import AutoTokenizer
 def main():
     p = argparse.ArgumentParser(description="Merge SFT LoRA adapter into base model")
     p.add_argument("--base", default="./Qwen3.5-9B", help="基座模型（与 SFT 一致）")
-    p.add_argument("--adapter", default="./outputs/sft_lora_adapter", help="verl SFT 输出的 LoRA 目录")
-    p.add_argument("--output", default="./outputs/sft_merged", help="merge 后完整 checkpoint 目录")
+    p.add_argument("--adapter", default="./training/sft/outputs", help="verl SFT 输出的 LoRA 目录")
+    p.add_argument("--output", default="./training/sft/merged", help="merge 后完整 checkpoint 目录")
     args = p.parse_args()
 
     print(f"[merge] loading adapter from {args.adapter}")

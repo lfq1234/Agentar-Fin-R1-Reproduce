@@ -1,36 +1,55 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Agentar-Fin-R1 — Stage 2 GRPO (verl)
+# Agentar-Fin-R1 — Stage 2 GRPO (verl) 两阶段启动壳
 # ----------------------------------------------------------------------------
-# 在 Stage 1 merge 后的完整模型（outputs/sft_merged）上做 GRPO 强化学习攻坚。
+# Phase 1: 数据预处理（原始 JSON/JSONL → verl GRPO parquet）
+# Phase 2: GRPO 训练（在 SFT merge 后模型上做强化学习）
+#
 # 基座 Qwen3.5-9B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
 # 外部 DeepSeek V4 Flash API 裁判（fin_judge_reward.py，走 OpenAI 兼容 /v1）。
 #
 # 与旧 ms-swift 版等价映射：
-#   num_generations=8          → actor_rollout_ref.rollout.n=8        (group size K)
-#   beta=0.04                  → actor_rollout_ref.actor.kl_loss_coef=0.04
+#   num_generations=8          → rollout.n=8           (group size K)
+#   beta=0.04                  → actor.kl_loss_coef=0.04
 #   temperature=0.9 / top_p=0.9→ rollout.temperature / rollout.top_p
-#   max_completion_length=1024 → data.max_response_length=1024
+#   max_completion_length=2048 → data.max_response_length=2048
 #   max_prompt_length=2048     → data.max_prompt_length=2048
 #   learning_rate=5e-6         → actor.optim.lr=5e-6
-#   gradient_accumulation=8    → data.train_batch_size=64 + ppo_mini_batch_size=64
-#   use_vllm / colocate        → rollout.name=vllm（verl 原生 vLLM rollout）
-#   reward_funcs=judge_reward  → custom_reward_function.name=compute_score
 #
 # 运行顺序：① SFT → ② merge_lora.py → ③ 本脚本
 #
 # 用法：
-#   NPROC=1 \
-#   SFT_MERGED=./outputs/sft_merged \
-#   GRPO_DATA=./data/verl/grpo.parquet \
+#   # 一键：原始数据 → 预处理 → 训练
+#   RAW_DATA=./data/raw/train.json bash training/grpo/train_grpo.sh
+#
+#   # 已有 parquet，跳过预处理
+#   GRPO_DATA=./data/verl/grpo.parquet bash training/grpo/train_grpo.sh
+#
+#   # 指定 merge 后模型
+#   SFT_MERGED=./training/sft/merged GRPO_DATA=./data/verl/grpo.parquet \
 #     bash training/grpo/train_grpo.sh
 # ============================================================================
 set -xeuo pipefail
 
-SFT_MERGED=${SFT_MERGED:-./outputs/sft_merged}
+SCRIPT_DIR="$(dirname "$0")"
+
+# ---- Phase 1: 数据预处理（若指定了 RAW_DATA） ----
+if [ -n "${RAW_DATA:-}" ]; then
+    export GRPO_DATA="${GRPO_DATA:-./data/verl/grpo.parquet}"
+    echo "[train_grpo.sh] Phase 1: 数据预处理  $RAW_DATA → $GRPO_DATA"
+    python "$SCRIPT_DIR/prepare_grpo_data.py" \
+        --input "$RAW_DATA" \
+        --output "$GRPO_DATA"
+    echo "[train_grpo.sh] Phase 1: 完成 → $GRPO_DATA"
+fi
+
+# ---- Phase 2: GRPO 训练 ----
+SFT_MERGED=${SFT_MERGED:-./training/sft/merged}
 GRPO_DATA=${GRPO_DATA:-./data/verl/grpo.parquet}
 NPROC=${NPROC:-1}
 REWARD_SCRIPT=${REWARD_SCRIPT:-./training/grpo/fin_judge_reward.py}
+
+echo "[train_grpo.sh] Phase 2: GRPO 训练  merged=$SFT_MERGED  data=$GRPO_DATA"
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -39,7 +58,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_files=${GRPO_DATA} \
     data.train_batch_size=64 \
     data.max_prompt_length=2048 \
-    data.max_response_length=1024 \
+    data.max_response_length=2048 \
     data.filter_overlong_prompts=True \
     data.truncation=error \
     actor_rollout_ref.model.path=${SFT_MERGED} \
@@ -85,4 +104,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
     trainer.total_epochs=1 \
-    trainer.default_local_dir=./outputs/grpo_lora_adapter
+    trainer.default_local_dir=./training/grpo/outputs
