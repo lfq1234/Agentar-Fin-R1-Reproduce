@@ -20,10 +20,41 @@ from typing import Optional
 MAX_NODES = 40
 MAX_EDGES = 80
 
-NODE_TYPES = ("Document", "Org", "Product", "Clause", "Metric", "Person", "Concept")
+NODE_TYPES = (
+    "Document",
+    "Org",
+    "Product",
+    "Clause",
+    "Metric",
+    "Person",
+    "Education",
+    "Company",
+    "Skill",
+    "Concept",
+)
 
-# 金融实体启发式规则（中文为主，按类型优先级从具体到宽泛匹配）
+# 实体启发式规则（中文为主，按类型优先级从具体到宽泛匹配）。
+# 默认覆盖金融文档，也覆盖简历/自我介绍等通用文档（人名、学校、公司、技能）。
 _PATTERNS: list[tuple[str, str]] = [
+    # 人名：职位后缀 / "我叫" 上下文 / "姓名" 上下文
+    ("Person", r"[\u4e00-\u9fa5]{2,4}(?:先生|女士|经理|总监|董事长|基金经理)"),
+    ("Person", r"(?<=我叫)[\u4e00-\u9fa5]{2,4}"),
+    ("Person", r"(?<=姓名)[：:是为\s]*([\u4e00-\u9fa5]{2,4})"),
+    # 教育/学校：用上下文动词 + 捕获组，避免把"目前是北京大学..."整体当学校名。
+    (
+        "Education",
+        r"(?:目前是|就读于|毕业于|来自|在|本科于|硕士于|博士于)"
+        r"([\u4e00-\u9fa5]{2,20}(?:大学|学院|学校|研究院))",
+    ),
+    # 公司/机构：只认明确的公司/集团后缀，避免把"参与搭建基金"等误判为公司。
+    ("Company", r"[\u4e00-\u9fa5A-Za-z0-9]{2,20}(?:公司|集团)(?:[^\u4e00-\u9fa5]|$)"),
+    # 技能/技术栈
+    (
+        "Skill",
+        r"\b(?:Python|C\+\+|PyTorch|TensorFlow|Transformers?|LoRA|QLoRA|Qwen|GPT|LLM|"
+        r"大模型|机器学习|深度学习|数据分析|算法|NLP|CV)\b",
+    ),
+    # 金融实体
     (
         "Org",
         r"[\u4e00-\u9fa5A-Za-z]{2,12}?(?:银行|证券|保险|基金管理|信托|交易所|证监会|"
@@ -40,7 +71,6 @@ _PATTERNS: list[tuple[str, str]] = [
         r"(?:年化收益率|七日年化|净值|风险等级|管理费率|托管费率|申购费|赎回费|"
         r"最大回撤|夏普比率|保额|保费)(?:[:：]?\s*[\dA-Za-z.%万亿]+)?",
     ),
-    ("Person", r"[\u4e00-\u9fa5]{2,4}(?:先生|女士|经理|总监|董事长|基金经理)"),
 ]
 
 
@@ -102,7 +132,9 @@ def _heuristic(text: str, doc_id: str, filename: str) -> tuple[list[GraphNode], 
         hits: list[str] = []
         for ntype, pattern in _PATTERNS:
             for m in re.finditer(pattern, para):
-                label = m.group(0).strip()
+                # 若模式带捕获组，取捕获内容（如 "姓名：林富强" → "林富强"）；
+                # 否则取完整匹配。
+                label = (m.group(1) if m.lastindex else m.group(0)).strip()
                 if len(label) < 2:
                     continue
                 key = _dedup_key(label)

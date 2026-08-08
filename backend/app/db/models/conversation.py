@@ -48,7 +48,8 @@ class ChatRequest(ConversationBase):
     conversation_id: Optional[int] = None  # 续聊
     # 08-个人文档：为 true 时把 user_id 名下已入库的个人文档并入 RAG 召回。
     # 服务端强制以 user_id 为作用域，模型侧不可见该字段（防越权）。
-    use_personal_docs: bool = False
+    # 默认 true：已登录用户提问时，智能体应主动检索其个人文档作为背景知识。
+    use_personal_docs: bool = True
 
 
 class ChatResponse(ConversationBase):
