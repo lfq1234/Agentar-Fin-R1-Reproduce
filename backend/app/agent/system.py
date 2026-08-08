@@ -203,14 +203,12 @@ async def run(
                  "content": f"场景判定：{scene}", "meta": {"scene": scene, "scene_explicit": scene_explicit, "matched": matched}}
             )
 
-        # 1.5) 快速通道：非金融 / 通用问题由 Coordinator 直接回答，不走 RAG / 专家 / 审核 / 风控。
+        # 1.5) 快速通道：非金融 / 通用问题由 Direct 助手自然语言回答，不走 RAG / 专家 /
+        #    审核 / 风控，也不把中间步骤暴露给用户。
         if scene == "Direct":
             direct_msg = Msg(name="user", content=message, role="user")
-            draft = await _call_agent(sys.agents["coordinator"], direct_msg)
-            trace.append(
-                {"agent": "Coordinator", "type": "final", "content": draft, "meta": {"scene": scene}}
-            )
-            return AgentResult(reply=draft, agent_trace=trace)
+            draft = await _call_agent(sys.agents["direct"], direct_msg)
+            return AgentResult(reply=draft, agent_trace=[])
 
         # 2) RAG 检索（经 RAG ReActAgent 的 retrieve 工具 → 06 知识库 + 08 个人文档）
         #    检索作用域用 contextvars 下传，工具签名保持只有 query（防 LLM 编造 user_id）。

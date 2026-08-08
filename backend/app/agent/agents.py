@@ -114,6 +114,13 @@ def build_agents(inner: ModelInterface) -> dict:
         sys_prompt=_load_prompt("coordinator"),
     )
 
+    # —— 直答助手（DialogAgent，通用/非金融业务问题直接自然语言回答） ——
+    agents["direct"] = DialogAgentX(
+        name="Direct",
+        inner=inner,
+        sys_prompt=_load_prompt("direct"),
+    )
+
     # —— 5 个领域专家（ReActAgent） ——
     for scene, prompt_file in [
         ("Banking", "banking"),

@@ -27,6 +27,7 @@ def _dt_to_ms(dt: datetime) -> int:
 # 多人对话模式：给各智能体步骤分配头像与中文名，前端按 agent 字段渲染。
 _AGENT_META: dict[str, tuple[str, str]] = {
     "Coordinator": ("🤖", "协调者"),
+    "Direct": ("🤖", "Agentar"),
     "rag": ("🔍", "资料检索"),
     "RAGRetriever": ("🔍", "资料检索"),
     "Banking": ("🏦", "银行专家"),
@@ -114,8 +115,9 @@ def _build_messages(result: Any) -> list[dict[str, Any]]:
                 "mention": _mention_name("Coordinator"),
             })
 
-    # 3) 最终正式回复：由 revise 步骤的作答角色或协调者输出，不再 @ 任何人
-    final_agent_key = "Coordinator"
+    # 3) 最终正式回复：由 revise 步骤的作答角色或协调者输出，不再 @ 任何人。
+    #    trace 为空意味着走 Direct 直答通道，使用 Direct/Agentar 身份。
+    final_agent_key = "Direct" if not trace else "Coordinator"
     for step in reversed(trace):
         if step.get("type") == "revise":
             final_agent_key = step.get("agent") or "Coordinator"
