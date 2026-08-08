@@ -45,7 +45,7 @@ export function DocumentUploader({ onUpload, uploading }: Props) {
         ⬆
       </div>
       <div className="doc-uploader-text">{uploading ? "上传中…" : "点击或拖拽上传文档"}</div>
-      <div className="doc-uploader-hint">支持 PDF / DOCX / TXT / MD，单文件 ≤20MB，最多 10 个</div>
+      <div className="doc-uploader-hint">支持 PDF / DOCX / DOC / DOCS / TXT / MD，单文件 ≤20MB，最多 10 个</div>
     </div>
   );
 }

@@ -58,6 +58,34 @@ export function App() {
     setUser(null);
   }, []);
 
+  // 注意：useChat 必须先于下方依赖 loadSessions 的 useEffect 调用，
+  // 否则依赖数组在渲染期求值时 loadSessions 仍处于 TDZ，导致整页白屏。
+  const {
+    sessions,
+    currentSessionId,
+    selectSession,
+    createSession,
+    deleteSession,
+    loadSessions,
+    personalDocsOpen,
+    togglePersonalDocs,
+    sidebarOpen,
+    toggleSidebar,
+    history,
+    lastAssistant,
+    message,
+    setMessage,
+    loading,
+    analyzing,
+    analyzeResult,
+    setAnalyzeResult,
+    error,
+    setError,
+    backendStatus,
+    send,
+    runAnalyze,
+  } = useChat();
+
   // 启动校验：携带本地令牌请求 /auth/me，成功则进入聊天界面，失败则回到登录页。
   useEffect(() => {
     let cancelled = false;
@@ -90,32 +118,6 @@ export function App() {
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
-
-  const {
-    sessions,
-    currentSessionId,
-    selectSession,
-    createSession,
-    deleteSession,
-    loadSessions,
-    personalDocsOpen,
-    togglePersonalDocs,
-    sidebarOpen,
-    toggleSidebar,
-    history,
-    lastAssistant,
-    message,
-    setMessage,
-    loading,
-    analyzing,
-    analyzeResult,
-    setAnalyzeResult,
-    error,
-    setError,
-    backendStatus,
-    send,
-    runAnalyze,
-  } = useChat();
 
   const isEmpty = history.length === 0;
 
