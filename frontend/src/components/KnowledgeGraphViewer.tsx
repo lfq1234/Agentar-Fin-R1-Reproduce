@@ -2,43 +2,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Graph, GraphEvent } from "@antv/g6";
 import type { GraphEdge, GraphNode } from "../types/agent";
 import { nodeColor, nodeRadius } from "../utils/graph";
-import { GraphControls } from "./GraphControls";
 import { EntityDetailPanel } from "./EntityDetailPanel";
 
 interface Props {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  docOptions: { id: string; name: string }[];
-  selectedTypes: string[];
-  onToggleType: (t: string) => void;
-  selectedDocId: string;
-  onSelectDoc: (id: string) => void;
   onInjectContext: (text: string) => void;
   docById: Map<string, string>; // docId -> filename
-  allTypes: string[];
+  registerGraph?: (g: Graph | null) => void; // 把 G6 实例交出去，让外部控件（顶部筛选条）可调缩放
 }
 
 // G6 基于 Canvas 渲染，承载量远超原 SVG 方案（评审 G3 的 200 上限是针对 React+SVG 的）。
 // 此处仅在节点数极大时给出筛选提示，避免无意义的全量绘制。
 const TOO_MANY_NODES = 1000;
 
-export function KnowledgeGraphViewer(props: Props) {
-  const {
-    nodes,
-    edges,
-    docOptions,
-    selectedTypes,
-    onToggleType,
-    selectedDocId,
-    onSelectDoc,
-    onInjectContext,
-    docById,
-    allTypes,
-  } = props;
-
+export function KnowledgeGraphViewer({ nodes, edges, onInjectContext, docById, registerGraph }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
-  const [zoom, setZoom] = useState(1);
   const [detailNode, setDetailNode] = useState<GraphNode | null>(null);
   const [hover, setHover] = useState<{ text: string; x: number; y: number } | null>(null);
 
@@ -120,13 +100,16 @@ export function KnowledgeGraphViewer(props: Props) {
       ],
     });
     graphRef.current = graph;
+    // 把 G6 实例交给父级（hook），让顶部筛选条上的缩放按钮可直接驱动画布。
+    registerGraph?.(graph);
     // 用户用滚轮缩放后，同步比例显示。
-    graph.on(GraphEvent.AFTER_TRANSFORM, () => setZoom(graph.getZoom()));
+    graph.on(GraphEvent.AFTER_TRANSFORM, () => {/* no-op: 缩放反馈已上移到顶部条 */});
     return () => {
       graph.destroy();
       graphRef.current = null;
+      registerGraph?.(null);
     };
-  }, []);
+  }, [registerGraph]);
 
   // 数据变化 → 重新渲染并自适应视图。
   useEffect(() => {
@@ -165,18 +148,6 @@ export function KnowledgeGraphViewer(props: Props) {
     };
   }, [nodeById]);
 
-  const zoomBy = (factor: number) => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    void graph.zoomTo(graph.getZoom() * factor, { duration: 200 }).then(() => setZoom(graph.getZoom()));
-  };
-
-  const resetView = () => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    void graph.fitView({ when: "always", direction: "both" }).then(() => setZoom(graph.getZoom()));
-  };
-
   if (nodes.length === 0) {
     return (
       <div className="graph-viewer graph-empty">
@@ -190,19 +161,6 @@ export function KnowledgeGraphViewer(props: Props) {
 
   return (
     <div className="graph-viewer">
-      <GraphControls
-        scale={zoom}
-        onZoomIn={() => zoomBy(1.2)}
-        onZoomOut={() => zoomBy(1 / 1.2)}
-        onReset={resetView}
-        types={allTypes}
-        selectedTypes={selectedTypes}
-        onToggleType={onToggleType}
-        docOptions={docOptions}
-        selectedDocId={selectedDocId}
-        onSelectDoc={onSelectDoc}
-      />
-
       {tooMany && (
         <div className="graph-toomany">
           节点较多（{nodes.length}），建议按类型或文档筛选以提升交互流畅度。

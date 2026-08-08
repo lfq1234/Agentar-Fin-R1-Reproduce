@@ -1150,17 +1150,14 @@ body {
   white-space: nowrap;
 }
 
-/* 图谱浮动控件 */
+/* 图谱顶部筛选条：tabs 下方一行；仅在知识图谱标签出现 */
 .graph-controls {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-end;
-  max-width: 60%;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
 }
 .graph-zoom {
   display: flex;
@@ -1192,24 +1189,25 @@ body {
   text-align: center;
 }
 .graph-filter {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 100%;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
 }
 .graph-filter-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
+  white-space: nowrap;
 }
 .graph-filter-types {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 .graph-type-chip {
   display: inline-flex;
@@ -1294,8 +1292,8 @@ body {
     width: 100%;
     max-width: 100%;
   }
-  .graph-controls {
-    max-width: 80%;
+  .graph-filter {
+    max-width: 100%;
   }
 }
 

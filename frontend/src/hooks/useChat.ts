@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  chat,
-  analyze,
+  chatStream,
+  analyze as apiAnalyze,
   health,
   listSessions,
   getSession,
@@ -14,6 +14,7 @@ import type {
   AnalyzeResponse,
   BackendStatus,
   ChatRequest,
+  ChatStreamEvent,
   ChatSession,
   SessionMeta,
   UiMessage,
@@ -139,7 +140,7 @@ export function useChat() {
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) ?? sessions[0];
 
-  // 发送：仅在当前会话内追加消息，并更新 conversationId / updatedAt（评审 M4 复用）。
+  // SSE 流式发送：每收到一个专家消息就立即追加到历史，形成边说边出现的群聊效果。
   const send = useCallback(async () => {
     const text = message.trim();
     if (!text || loading || !currentSession) return;
@@ -157,51 +158,55 @@ export function useChat() {
 
     const req: ChatRequest = {
       message: text,
-      // 已有 conversationId 则携带，复用后端会话上下文（M4）
       ...(currentSession.conversationId ? { conversation_id: currentSession.conversationId } : {}),
     };
 
+    // 本轮流式产生的智能体消息，最终一起写入 history
+    const agentMsgs: UiMessage[] = [];
+
+    const pushAgentMsg = (m: UiMessage) => {
+      agentMsgs.push(m);
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sid
+            ? { ...s, history: [...s.history, m], updatedAt: Date.now() }
+            : s,
+        ),
+      );
+    };
+
     try {
-      const res = await chat(req);
-      const newConversationId = res.conversation_id ?? null;
+      const { reply, conversationId } = await chatStream(req, (ev: ChatStreamEvent) => {
+        if (ev.type === "agent_message" && ev.content) {
+          pushAgentMsg({
+            role: "agent",
+            content: ev.content,
+            agent: ev.agent,
+            avatar: ev.avatar,
+            mention: ev.mention ?? undefined,
+            type: "expert_opinion",
+          });
+        }
+      });
+
+      const newConversationId = conversationId ?? null;
       const newBackendId = newConversationId != null ? String(newConversationId) : sid;
-      const participants = participantsFromTrace(res.agent_trace);
       setCurrentSessionId(newBackendId);
+
+      // 追加最终助手回复
+      const finalMsg: UiMessage = { role: "assistant", content: reply };
+      const finalHistory = [...agentMsgs, finalMsg];
+      const title = currentSession.title === "新对话"
+        ? deriveTitle([userMsg, ...finalHistory])
+        : currentSession.title;
+
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sid) return s;
-          // 02 多人对话：后端返回 messages 时，按顺序渲染每个智能体气泡；
-          // 未返回时退化为旧版单条助手回复。
-          // 任意通道下，最终助手（assistant）消息都带上「本轮参与者」，让
-          // Direct 直答与 Multi 圆桌两种模式都能在前端看出"是哪些智能体干的"。
-          const replyMessages: UiMessage[] =
-            res.messages && res.messages.length > 0
-              ? res.messages.map((m) =>
-                  m.role === "assistant"
-                    ? {
-                        ...m,
-                        compliance: res.compliance_notes,
-                        risk: res.risk_flags,
-                        participants,
-                      }
-                    : { ...m },
-                )
-              : [
-                  {
-                    role: "assistant",
-                    content: res.reply,
-                    compliance: res.compliance_notes,
-                    risk: res.risk_flags,
-                    participants,
-                  },
-                ];
-          const history: UiMessage[] = [...s.history, ...replyMessages];
-          // 首次出现用户消息后，标题从「新对话」派生
-          const title = s.title === "新对话" ? deriveTitle(history) : s.title;
           return {
             ...s,
             id: newBackendId,
-            history,
+            history: [...s.history, finalMsg],
             title,
             conversationId: newConversationId,
             updatedAt: Date.now(),
@@ -229,7 +234,7 @@ export function useChat() {
       message: text,
     };
     try {
-      const res = await analyze(req);
+      const res = await apiAnalyze(req);
       setAnalyzeResult(res);
     } catch (e) {
       setError((e as ApiError).message ?? "分析失败");

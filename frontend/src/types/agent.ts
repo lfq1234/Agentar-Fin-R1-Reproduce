@@ -36,6 +36,20 @@ export interface ChatResponse {
   messages?: ChatMessage[];
 }
 
+// SSE 流式聊天事件（后端 run_stream() 逐步骤 yield）
+export interface ChatStreamEvent {
+  type: "route" | "agent_start" | "agent_message" | "done" | "error";
+  agent?: string;
+  avatar?: string;
+  name?: string;
+  content?: string;
+  mention?: string;
+  scene?: string;
+  reply?: string;
+  conversation_id?: number | null;
+  detail?: string;
+}
+
 export interface AnalyzeRequest {
   message: string;
 }

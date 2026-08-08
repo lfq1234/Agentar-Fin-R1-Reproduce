@@ -1,6 +1,7 @@
 import type {
   ChatRequest,
   ChatResponse,
+  ChatStreamEvent,
   AnalyzeRequest,
   AnalyzeResponse,
   PersonalDocument,
@@ -92,6 +93,61 @@ function get<T>(path: string): Promise<T> {
 
 export const chat = (req: ChatRequest) => post<ChatResponse>("/chat", req);
 export const analyze = (req: AnalyzeRequest) => post<AnalyzeResponse>("/analyze", req);
+
+// SSE 流式聊天：读取 ReadableStream，逐事件回调，返回最终的 reply + conversation_id
+export async function chatStream(
+  req: ChatRequest,
+  onEvent: (ev: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<{ reply: string; conversationId: number | null }> {
+  const res = await fetch(`${BASE}/chat/stream`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (res.status === 401 || res.status === 403) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new ApiError(res.status, `请求失败 (${res.status})${detail ? "：" + detail : ""}`);
+  }
+
+  let reply = "";
+  let conversationId: number | null = null;
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const ev: ChatStreamEvent = JSON.parse(line.slice(6));
+          if (ev.type === "done") {
+            reply = ev.reply || "";
+            conversationId = ev.conversation_id ?? null;
+          } else if (ev.type === "error") {
+            throw new ApiError(500, ev.detail || "流式处理错误");
+          }
+          onEvent(ev);
+        } catch (e) {
+          if (e instanceof ApiError) throw e;
+        }
+      }
+    }
+  }
+
+  return { reply, conversationId };
+}
 
 export async function health(): Promise<{ status: string }> {
   // 健康检查挂载在 /api 前缀下（与 chat/analyze 的 /api/v1 区分），公开接口无需令牌。

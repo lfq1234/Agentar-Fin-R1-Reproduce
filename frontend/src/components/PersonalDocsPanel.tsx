@@ -5,6 +5,7 @@ import { useKnowledgeGraph } from "../hooks/useKnowledgeGraph";
 import { DocumentUploader } from "./DocumentUploader";
 import { DocumentList } from "./DocumentList";
 import { KnowledgeGraphViewer } from "./KnowledgeGraphViewer";
+import { GraphControls } from "./GraphControls";
 
 interface Props {
   onClose: () => void;
@@ -23,7 +24,7 @@ export function PersonalDocsPanel({ onClose, onInjectContext, onAskWithDocument 
   // 切换到图谱标签时拉取最新图谱（文档解析完成后自动刷新）。
   useEffect(() => {
     if (tab === "graph") kg.fetchGraph();
-  }, [tab, kg]);
+  }, [tab, kg.fetchGraph]);
 
   const docById = new Map(docs.documents.map((d) => [d.id, d.filename]));
   const docOptions = docs.documents.map((d) => ({ id: d.id, name: d.filename }));
@@ -58,6 +59,23 @@ export function PersonalDocsPanel({ onClose, onInjectContext, onAskWithDocument 
 
       {docs.error && <div className="pd-error">{docs.error}</div>}
 
+      {tab === "graph" && (
+        <GraphControls
+          scale={1}
+          onZoomIn={() => kg.zoomBy(1.2)}
+          onZoomOut={() => kg.zoomBy(1 / 1.2)}
+          onReset={() => kg.resetView()}
+          types={kg.allTypes}
+          selectedTypes={kg.selectedTypes}
+          onToggleType={(t) =>
+            kg.setSelectedTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
+          }
+          docOptions={docOptions}
+          selectedDocId={kg.selectedDocId}
+          onSelectDoc={kg.setSelectedDocId}
+        />
+      )}
+
       {tab === "docs" ? (
         <div className="pd-docs-view">
           <DocumentUploader onUpload={docs.uploadFiles} uploading={docs.uploading} />
@@ -71,16 +89,9 @@ export function PersonalDocsPanel({ onClose, onInjectContext, onAskWithDocument 
             <KnowledgeGraphViewer
               nodes={kg.filteredNodes}
               edges={kg.filteredEdges}
-              docOptions={docOptions}
-              selectedTypes={kg.selectedTypes}
-              onToggleType={(t) =>
-                kg.setSelectedTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
-              }
-              selectedDocId={kg.selectedDocId}
-              onSelectDoc={kg.setSelectedDocId}
               onInjectContext={onInjectContext}
               docById={docById}
-              allTypes={kg.allTypes}
+              registerGraph={kg.registerGraph}
             />
           )}
         </div>

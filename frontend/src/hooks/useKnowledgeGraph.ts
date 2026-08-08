@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Graph as G6Graph } from "@antv/g6";
 import { getKnowledgeGraph, ApiError } from "../api/client";
 import type { PersonalKnowledgeGraph } from "../types/agent";
 
@@ -9,6 +10,23 @@ export function useKnowledgeGraph() {
   const [error, setError] = useState<string | null>(null);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedDocId, setSelectedDocId] = useState<string | "all">("all");
+
+  // G6 实例引用：KnowledgeGraphViewer 注册自身 ref，外部（GraphControls）
+  // 通过 zoomBy / resetView 调用。这样控件可以脱离画布浮层独立渲染。
+  const g6Ref = useRef<G6Graph | null>(null);
+  const registerGraph = useCallback((g: G6Graph | null) => {
+    g6Ref.current = g;
+  }, []);
+  const zoomBy = useCallback((factor: number) => {
+    const g = g6Ref.current;
+    if (!g) return;
+    void g.zoomTo(g.getZoom() * factor, { duration: 200 });
+  }, []);
+  const resetView = useCallback(() => {
+    const g = g6Ref.current;
+    if (!g) return;
+    void g.fitView({ when: "always", direction: "both" });
+  }, []);
 
   const fetchGraph = useCallback(async () => {
     setLoading(true);
@@ -61,5 +79,8 @@ export function useKnowledgeGraph() {
     selectedDocId,
     setSelectedDocId,
     fetchGraph,
+    zoomBy,
+    resetView,
+    registerGraph,
   };
 }
