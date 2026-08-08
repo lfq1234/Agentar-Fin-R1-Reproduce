@@ -4,8 +4,12 @@
 # ----------------------------------------------------------------------------
 # 将原始训练数据（messages 格式，role: HUMAN/ASSISTANT）转换为 GRPO 格式：
 #   - messages：仅保留 user 消息（prompt）
-#   - ground_truth：从 ASSISTANT 回复提取 \boxed{} 答案
-#   - extra_info：原题上下文，供裁判函数使用
+#   - ground_truth：标准答案（从 \boxed{} 提取）
+#   - extra_info：三部分 —— 原题、标准思维链、标准输出（供裁判 RLAIF 打分）
+#
+# ASSISTANT 的 content 拆分：
+#   <think>推理过程</think> → gold_thinking（参考 reasoning 维度）
+#   </think> 之后的内容     → gold_output（参考 correctness 维度）
 #
 # 输入格式支持：
 #   1. JSON 数组：[[{"role":"HUMAN",...},{"role":"ASSISTANT",...}], ...]
@@ -42,6 +46,14 @@ def _extract_boxed_answer(content: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def _split_thinking_and_output(content: str) -> tuple[str, str]:
+    """从 assistant content 中拆分 thinking 和 output。"""
+    m = re.search(r"<think>(.*?)</think>(.*)", content, re.DOTALL)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", content.strip()
+
+
 def load_messages(input_path: str) -> list[list[dict]]:
     path = Path(input_path)
     if not path.exists():
@@ -76,11 +88,12 @@ def main():
             for m in messages
             if m.get("role") in ("HUMAN", "human", "USER")
         ]
-        # ground_truth: 从 assistant 中提取 \boxed{} 答案
+        # assistant: 拆分为 thinking + output
         assistant_content = next(
             (m["content"] for m in messages if m.get("role") in ("ASSISTANT", "assistant", "GPT")),
             "",
         )
+        gold_thinking, gold_output = _split_thinking_and_output(assistant_content)
         answer = _extract_boxed_answer(assistant_content)
         question = next(
             (m["content"] for m in messages if m.get("role") in ("HUMAN", "human", "USER")),
@@ -89,7 +102,11 @@ def main():
         records.append({
             "messages": prompt_msgs,
             "ground_truth": json.dumps({"answer": answer, "verifiable": bool(answer)}),
-            "extra_info": json.dumps({"question": question}),
+            "extra_info": json.dumps({
+                "question": question,
+                "gold_thinking": gold_thinking,
+                "gold_output": gold_output,
+            }),
         })
 
     df = pd.DataFrame(records)
