@@ -1,6 +1,12 @@
-import type { AuthUser, ChatSession } from "../types/agent";
+import type { AuthUser, BackendStatus, ChatSession } from "../types/agent";
 import { PersonalDocsCard } from "./PersonalDocsCard";
 import { SessionList } from "./SessionList";
+
+const STATUS_TEXT: Record<BackendStatus, string> = {
+  unknown: "连接中…",
+  ok: "后端在线",
+  down: "后端离线",
+};
 
 interface Props {
   sessions: ChatSession[];
@@ -10,6 +16,7 @@ interface Props {
   user?: AuthUser | null;
   canAnalyze: boolean;
   analyzing: boolean;
+  backendStatus: BackendStatus;
   onSelectSession: (id: string) => void;
   onCreateSession: () => void;
   onDeleteSession: (id: string) => void;
@@ -26,6 +33,7 @@ export function Sidebar({
   user,
   canAnalyze,
   analyzing,
+  backendStatus,
   onSelectSession,
   onCreateSession,
   onDeleteSession,
@@ -55,6 +63,10 @@ export function Sidebar({
         </span>
         <span>{analyzing ? "分析中…" : "分析最近回复"}</span>
       </button>
+      <div className="backend-status" title={STATUS_TEXT[backendStatus]}>
+        <span className={`status-bulb ${backendStatus}`} />
+        <span className="backend-status-text">{STATUS_TEXT[backendStatus]}</span>
+      </div>
       <div className="sidebar-divider" />
       <SessionList
         sessions={sessions}

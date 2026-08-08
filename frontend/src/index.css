@@ -562,6 +562,24 @@ body {
   line-height: 1;
 }
 
+/* Sidebar 中后端连接状态，紧跟“分析最近回复”下方 */
+.backend-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  width: 100%;
+}
+.backend-status-text {
+  line-height: 1;
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;

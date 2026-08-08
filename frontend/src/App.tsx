@@ -140,6 +140,7 @@ export function App() {
         user={user}
         canAnalyze={!!lastAssistant}
         analyzing={analyzing}
+        backendStatus={backendStatus}
         onSelectSession={selectSession}
         onCreateSession={createSession}
         onDeleteSession={deleteSession}
@@ -179,10 +180,7 @@ export function App() {
           </div>
         ) : (
           <>
-            <Header
-              onToggleSidebar={toggleSidebar}
-              backendStatus={backendStatus}
-            />
+            <Header onToggleSidebar={toggleSidebar} />
 
             <section className="chat-area">
               <MessageList messages={history} />
