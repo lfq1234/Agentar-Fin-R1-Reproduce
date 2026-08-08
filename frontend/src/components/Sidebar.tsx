@@ -8,10 +8,13 @@ interface Props {
   personalDocsOpen: boolean;
   sidebarOpen: boolean;
   user?: AuthUser | null;
+  canAnalyze: boolean;
+  analyzing: boolean;
   onSelectSession: (id: string) => void;
   onCreateSession: () => void;
   onDeleteSession: (id: string) => void;
   onTogglePersonalDocs: () => void;
+  onAnalyze: () => void;
   onLogout: () => void;
 }
 
@@ -21,10 +24,13 @@ export function Sidebar({
   personalDocsOpen,
   sidebarOpen,
   user,
+  canAnalyze,
+  analyzing,
   onSelectSession,
   onCreateSession,
   onDeleteSession,
   onTogglePersonalDocs,
+  onAnalyze,
   onLogout,
 }: Props) {
   return (
@@ -38,6 +44,17 @@ export function Sidebar({
         </button>
       </div>
       <PersonalDocsCard active={personalDocsOpen} onClick={onTogglePersonalDocs} />
+      <button
+        className="analyze-card"
+        onClick={onAnalyze}
+        disabled={!canAnalyze || analyzing}
+        title="分析当前会话最近一条助手回复的意图、槽位、工具规划与表达"
+      >
+        <span className="analyze-card-icon" aria-hidden>
+          🔍
+        </span>
+        <span>{analyzing ? "分析中…" : "分析最近回复"}</span>
+      </button>
       <div className="sidebar-divider" />
       <SessionList
         sessions={sessions}

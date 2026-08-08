@@ -106,6 +106,23 @@ body {
   align-items: center;
   gap: 12px;
 }
+.header-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.header-btn:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: var(--hover-bg);
+}
+.header-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 /* Buttons */
 .btn {
@@ -145,61 +162,7 @@ body {
   overflow: hidden;
 }
 
-/* 左侧操作栏：场景 / 分析 / 新对话 */
-.chat-leftbar {
-  width: 150px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-}
-.leftbar-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.leftbar-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.leftbar-btn {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-  text-align: left;
-}
-.leftbar-btn:hover:not(:disabled) {
-  border-color: #cbd5e1;
-  background: var(--hover-bg);
-}
-.leftbar-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.leftbar-footer {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.leftbar-status {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 原 .chat-leftbar / .leftbar-* 已并入 Header 与 Sidebar，移除独立操作列。 */
 
 .chat-area {
   flex: 1;
@@ -568,6 +531,37 @@ body {
   font-size: 16px;
   line-height: 1;
 }
+
+/* Sidebar 中“分析最近回复”入口，紧跟“个人文档”下方 */
+.analyze-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  width: 100%;
+  opacity: 1;
+  transition: opacity 0.15s ease;
+}
+.analyze-card:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+.analyze-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.analyze-card-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;

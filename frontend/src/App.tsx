@@ -17,37 +17,6 @@ const STATUS_TEXT: Record<string, string> = {
   down: "后端离线",
 };
 
-function LeftToolbar({
-  onNewSession,
-  onAnalyze,
-  canAnalyze,
-  backendStatus,
-}: {
-  onNewSession: () => void;
-  onAnalyze: () => void;
-  canAnalyze: boolean;
-  backendStatus: string;
-}) {
-  return (
-    <aside className="chat-leftbar">
-      <div className="leftbar-group">
-        <label className="leftbar-label">操作</label>
-        <button className="leftbar-btn" onClick={onAnalyze} disabled={!canAnalyze} title="分析最近一条助手回复">
-          分析
-        </button>
-        <button className="leftbar-btn" onClick={onNewSession}>
-          新对话
-        </button>
-      </div>
-
-      <div className="leftbar-footer">
-        <span className={`status-bulb ${backendStatus}`} title={STATUS_TEXT[backendStatus]} />
-        <span className="leftbar-status">{STATUS_TEXT[backendStatus]}</span>
-      </div>
-    </aside>
-  );
-}
-
 export function App() {
   // 09：登录门禁。启动时若有令牌则校验有效性，无效则清令牌回到登录页。
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -169,10 +138,13 @@ export function App() {
         personalDocsOpen={personalDocsOpen}
         sidebarOpen={sidebarOpen}
         user={user}
+        canAnalyze={!!lastAssistant}
+        analyzing={analyzing}
         onSelectSession={selectSession}
         onCreateSession={createSession}
         onDeleteSession={deleteSession}
         onTogglePersonalDocs={togglePersonalDocs}
+        onAnalyze={runAnalyze}
         onLogout={logout}
       />
 
@@ -207,12 +179,8 @@ export function App() {
           </div>
         ) : (
           <>
-            <Header onToggleSidebar={toggleSidebar} backendStatus={backendStatus} />
-
-            <LeftToolbar
-              onNewSession={createSession}
-              onAnalyze={runAnalyze}
-              canAnalyze={!!lastAssistant}
+            <Header
+              onToggleSidebar={toggleSidebar}
               backendStatus={backendStatus}
             />
 
