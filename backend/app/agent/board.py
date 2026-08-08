@@ -26,10 +26,23 @@ from app.agent.model_bridge import extract_content
 # FR-EX5：会商 / 互询参与专家数上限，避免弱模型空转或成本 / 延迟失控。
 MAX_CONSULT_ROUNDS = 3
 
+# 进程级串行锁：本地模型（LocalTransformerModel.generate 为同步阻塞调用）+ 共享单例
+# agent（含对话记忆）不允许并发推理。``system._call_agent`` 与本会商板的 ``_call_agent``
+# 共用此锁，避免两条编排路径并发调用同一批单例 agent 导致对话记忆串味 / 单 GPU 推理打架。
+_MODEL_LOCK = asyncio.Lock()
+
 
 async def _call_agent(agent, msg: Msg) -> str:
-    """调用 agent 并提取文本（与 ``system._call_agent`` 同语义的独立副本，避免循环依赖）。"""
-    out = agent(msg)
+    """调用 agent 并提取文本（与 ``system._call_agent`` 同语义、共用 ``_MODEL_LOCK``）。
+
+    AgentScope 0.1.6 的 ``agent.__call__`` 是同步函数（``@async_func`` 仅为 RPC 标记，
+    不改变同步语义），其内部的 ``model.generate()`` 会阻塞调用线程。这里用
+    ``asyncio.to_thread`` 把整次 agent 应答搬离 uvicorn 事件循环，使服务期间事件循环
+    不被占住——``/health``、登录、第二个 ``/chat`` 等请求仍可正常响应；并以 ``_MODEL_LOCK``
+    串行化，避免并发修改共享单例 agent 的记忆（不改 01 模型路径）。
+    """
+    async with _MODEL_LOCK:
+        out = await asyncio.to_thread(agent, msg)
     if asyncio.iscoroutine(out):
         out = await out
     return extract_content(out)

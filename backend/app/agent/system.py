@@ -19,7 +19,7 @@ import agentscope
 from agentscope.message import Msg
 
 from app.agent.agents import SCENES, build_agents
-from app.agent.board import ExpertBoard
+from app.agent.board import ExpertBoard, _MODEL_LOCK
 from app.agent.model_bridge import AgentarModel, extract_content
 from app.agent.rag_scope import scoped
 from app.model import get_model
@@ -88,26 +88,35 @@ def get_system() -> _AgentSystem:
 
 
 async def _call_agent(agent, msg: Msg) -> str:
-    """调用 agent 并提取文本。ReActAgent 为 async，DialogAgent 为 sync，统一处理。"""
-    out = agent(msg)
+    """调用 agent 并提取文本。
+
+    模型推理（``LocalTransformerModel.generate``）是同步阻塞调用，位于 AgentScope 的
+    同步 ``agent.__call__`` 内。用 ``asyncio.to_thread`` 把整次应答搬离 uvicorn 事件循环，
+    使服务期间事件循环不被占住；并以 ``_MODEL_LOCK``（与 ``board._call_agent`` 共用）串行化，
+    避免并发请求同时调用共享单例 agent 导致对话记忆串味。模型路径（01 ``app/model``）不变。
+    """
+    async with _MODEL_LOCK:
+        out = await asyncio.to_thread(agent, msg)
     if asyncio.iscoroutine(out):
         out = await out
     return extract_content(out)
 
 
-def _parse_scene(text: str) -> Optional[str]:
+def _parse_scene(text: str, candidates: Optional[list[str]] = None) -> Optional[str]:
     if not text:
         return None
+    lowered = text.strip().lower()
     # 多领域问题：协调者输出 "Multi" → 走圆桌会商（档B）。
-    if text.strip().lower() == "multi":
+    if lowered == "multi":
         return "Multi"
-    for scene in SCENES:
-        if scene.lower() in text.lower():
+    pool = candidates if candidates else SCENES
+    for scene in pool:
+        if scene.lower() in lowered:
             return scene
     return None
 
 
-# 各领域的跨域关键词提示（用于档A 专家互询的触发判定）。
+# 各领域的跨域关键词提示（用于路由判定与档B 圆桌会商的专家选择）。
 _DOMAIN_HINTS: dict[str, list[str]] = {
     "Banking": ["存款", "贷款", "银行", "理财", "活期", "定期", "储蓄"],
     "Securities": ["股票", "证券", "A股", "港股", "打新", "ETF", "开户"],
@@ -117,18 +126,10 @@ _DOMAIN_HINTS: dict[str, list[str]] = {
 }
 
 
-def _detect_peer(scene: str, message: str) -> Optional[str]:
-    """档A 专家互询：从问题中识别一个**不同于当前场景**的领域关键词，返回其场景名。
-
-    仅在自动路由（scene 由协调者判定）时启用，显式指定 scene 不做跨域改写。
-    """
+def _matched_scenes(message: str) -> list[str]:
+    """根据关键词判定问题涉及哪些领域；空列表表示通用/非金融问题。"""
     msg = message or ""
-    for other, hints in _DOMAIN_HINTS.items():
-        if other == scene:
-            continue
-        if any(h in msg for h in hints):
-            return other
-    return None
+    return [scene for scene in SCENES if any(h in msg for h in _DOMAIN_HINTS.get(scene, []))]
 
 
 def _format_opinions(opinions: list[tuple[str, str]]) -> str:
@@ -180,21 +181,36 @@ async def run(
         # 07 落库：多智能体细粒度步骤（评审 B1 / v2 完整回放）。
         trace: list[dict] = []
 
-        # 1) 路由：未给定 scene 时由 Coordinator 判定；多领域问题返回 "Multi"。
+        # 1) 路由：优先按关键词命中领域；未命中 → 走 direct 快速回答；
+        #    命中多个领域 → 由 Coordinator 在命中集合里判定 Multi 或主领域。
+        matched = _matched_scenes(message)
         if scene is None:
-            route_msg = Msg(
-                name="user",
-                content=f"用户问题：{message}\n请判断场景"
-                f"（{'/'.join(SCENES)}）。若问题明显涉及多个领域，请只回复 Multi；"
-                f"否则只回复单个场景名。",
-                role="user",
-            )
-            scene_text = await _call_agent(sys.agents["coordinator"], route_msg)
-            scene = _parse_scene(scene_text) or "Banking"
+            if not matched:
+                scene = "Direct"
+            elif len(matched) == 1:
+                scene = matched[0]
+            else:
+                route_msg = Msg(
+                    name="user",
+                    content=f"用户问题：{message}\n可能涉及领域：{'/'.join(matched)}。"
+                    "若明显涉及多个领域，请只回复 Multi；否则只回复单个场景名。",
+                    role="user",
+                )
+                scene_text = await _call_agent(sys.agents["coordinator"], route_msg)
+                scene = _parse_scene(scene_text, candidates=matched) or "Multi"
             trace.append(
                 {"agent": "Coordinator", "type": "route",
-                 "content": f"场景判定：{scene}", "meta": {"scene": scene, "scene_explicit": scene_explicit}}
+                 "content": f"场景判定：{scene}", "meta": {"scene": scene, "scene_explicit": scene_explicit, "matched": matched}}
             )
+
+        # 1.5) 快速通道：非金融 / 通用问题由 Coordinator 直接回答，不走 RAG / 专家 / 审核 / 风控。
+        if scene == "Direct":
+            direct_msg = Msg(name="user", content=message, role="user")
+            draft = await _call_agent(sys.agents["coordinator"], direct_msg)
+            trace.append(
+                {"agent": "Coordinator", "type": "final", "content": draft, "meta": {"scene": scene}}
+            )
+            return AgentResult(reply=draft, agent_trace=trace)
 
         # 2) RAG 检索（经 RAG ReActAgent 的 retrieve 工具 → 06 知识库 + 08 个人文档）
         #    检索作用域用 contextvars 下传，工具签名保持只有 query（防 LLM 编造 user_id）。
@@ -205,26 +221,25 @@ async def run(
         )
         with scoped(user_id=user_id, use_personal_docs=use_personal_docs):
             context = await _call_agent(sys.agents["rag"], rag_msg)
-            trace.append(
-                {"agent": "rag", "type": "rag", "content": context, "meta": {"scene": scene}}
-            )
+            # RAG 结果仅作内部上下文，不展示给用户。
 
-            # 3) 领域专家作答：档B 圆桌会商 / 档A 单专家 + 同级互询
-            if scene == "Multi" or scene not in SCENES:
-                # 档B 圆桌会商：多位专家轮流发言，再由 coordinator 合成统一答案。
+            # 3) 领域专家作答：档B 圆桌会商只召集命中领域的专家；档A 单专家直接作答。
+            if scene == "Multi":
+                # 档B 圆桌会商：仅召集关键词命中的专家，而非全部 SCENES。
+                target_scenes = matched if matched else SCENES
                 base = Msg(
                     name="user",
                     content=f"参考上下文：\n{context}\n\n用户问题：{message}",
                     role="user",
                 )
-                opinions = await board.roundtable(SCENES, base)
+                opinions = await board.roundtable(target_scenes, base)
                 for name, text in opinions:
                     trace.append(
                         {"agent": name, "type": "expert_opinion", "content": text, "meta": {"scene": scene}}
                     )
                 synth_prompt = (
                     f"用户问题：{message}\n\n参考上下文：\n{context}\n\n"
-                    "以下为各位领域专家的独立意见，请综合为一份统一、不矛盾的答复：\n"
+                    "以下为相关领域专家的独立意见，请综合为一份统一、不矛盾的答复：\n"
                     + _format_opinions(opinions)
                 )
                 draft = await _call_agent(
@@ -237,27 +252,7 @@ async def run(
                 revise_role = sys.agents["coordinator"]
             else:
                 expert = sys.agents[scene]
-                # 档A 专家互询：仅自动路由且检测到跨域关键词时，编排层代专家咨询一个
-                # 相关同级，并将其意见并入作答上下文（专家自身仍只调一次）。
-                peer = None if scene_explicit else _detect_peer(scene, message)
-                if peer:
-                    peer_msg = Msg(
-                        name="user",
-                        content=f"参考上下文：\n{context}\n\n子问题：{message}",
-                        role="user",
-                    )
-                    peer_opinion = await board.consult(peer, peer_msg)
-                    trace.append(
-                        {"agent": peer, "type": "expert_opinion", "content": peer_opinion,
-                         "meta": {"scene": scene, "consulted_by": scene}}
-                    )
-                    expert_prompt = (
-                        f"参考上下文：\n{context}\n\n"
-                        f"同级专家（{peer}）的补充意见：\n{peer_opinion}\n\n"
-                        f"用户问题：{message}"
-                    )
-                else:
-                    expert_prompt = f"参考上下文：\n{context}\n\n用户问题：{message}"
+                expert_prompt = f"参考上下文：\n{context}\n\n用户问题：{message}"
                 draft = await _call_agent(
                     expert, Msg(name="user", content=expert_prompt, role="user")
                 )
