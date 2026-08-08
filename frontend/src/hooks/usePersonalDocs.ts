@@ -8,7 +8,7 @@ import {
 } from "../api/client";
 import type { PersonalDocument } from "../types/agent";
 
-const ALLOWED_EXT = ["pdf", "docx", "txt", "md"];
+const ALLOWED_EXT = ["pdf", "docx", "doc", "docs", "txt", "md"];
 const MAX_SIZE = 20 * 1024 * 1024; // 20MB
 const MAX_FILES = 10;
 const POLL_INTERVAL = 2000; // 2s
@@ -71,7 +71,7 @@ export function usePersonalDocs(onParseDone?: () => void) {
       for (const f of arr) {
         const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
         if (!ALLOWED_EXT.includes(ext)) {
-          rejected.push(`${f.name}：不支持的格式（仅 PDF/DOCX/TXT/MD）`);
+          rejected.push(`${f.name}：不支持的格式（仅 PDF/DOCX/DOC/DOCS/TXT/MD）`);
           continue;
         }
         if (f.size > MAX_SIZE) {

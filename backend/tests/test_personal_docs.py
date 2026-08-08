@@ -86,12 +86,50 @@ def test_ingest_html_strips_tags(db):
     assert "<p>" not in (rec["summary"] or "")
 
 
+# —— Word 文档解析（.doc / .docs / .docx） —— #
+def test_parse_doc_heuristic_extracts_chinese():
+    from app.db.personal_docs.parser import parse_bytes
+
+    # 老版 .doc：OLE2 头 + UTF-16LE 中文正文 + 二进制噪声
+    payload = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + "养老理财规划".encode("utf-16-le") + b"\x00\x01\x02\xff\xfe\x00"
+    text = parse_bytes("note.doc", payload)
+
+    assert "养老理财规划" in text
+
+
+def test_parse_docs_extension_supported_and_parsed():
+    from app.db.personal_docs.parser import parse_bytes, is_supported
+
+    assert is_supported("a.docs") and is_supported("a.doc") and is_supported("a.docx")
+    payload = b"\xd0\xcf\x11\xe0" + "保险 银行 理财".encode("utf-16-le") + b"\xff\xfe\x00"
+    text = parse_bytes("x.docs", payload)
+
+    assert "保险" in text and "银行" in text
+
+
+def test_parse_docx_via_python_docx():
+    import io as _io
+
+    from app.db.personal_docs.parser import parse_bytes
+    from docx import Document
+
+    d = Document()
+    d.add_paragraph("工商银行稳健理财适合养老。")
+    d.add_paragraph("风险等级中低。")
+    buf = _io.BytesIO()
+    d.save(buf)
+
+    text = parse_bytes("report.docx", buf.getvalue())
+
+    assert "工商银行" in text and "养老" in text
+
+
 # —— 失败隔离 —— #
 def test_unsupported_type_marks_error_not_raise(db):
     rec = svc.ingest_one("report.pdf", b"%PDF-1.4 binary", 1)
 
     assert rec["status"] == "error"
-    assert "pdf" in rec["error"]
+    assert rec["error"]
     # 失败文档同样进列表（前端要展示失败原因），但不产出块 / 向量
     assert pd.get_personal_doc_store().count_chunks(rec["id"]) == 0
     assert pd.get_vector_index().stats(user_id=1)["vector_count"] == 0

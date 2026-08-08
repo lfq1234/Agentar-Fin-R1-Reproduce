@@ -34,7 +34,7 @@ export function DocumentUploader({ onUpload, uploading }: Props) {
         ref={inputRef}
         type="file"
         multiple
-        accept=".pdf,.docx,.txt,.md"
+        accept=".pdf,.docx,.doc,.docs,.txt,.md"
         hidden
         onChange={(e) => {
           if (e.target.files?.length) onUpload(e.target.files);
