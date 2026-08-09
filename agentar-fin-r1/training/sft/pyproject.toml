@@ -1,0 +1,57 @@
+[project]
+name = "agentar-fin-r1-sft"
+version = "0.1.0"
+description = "Agentar-Fin-R1 Stage 1 SFT (verl 0.8.0 + Qwen3-8B + LoRA) 训练环境"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Agentar-Fin-R1 Reproduce" },
+]
+
+dependencies = [
+    # ----- 核心训练框架 -----
+    "torch==2.6.0",                    # cu124 wheel, A800 R525 通过 cuda-compat 支
+    "verl==0.8.0",                     # SFT trainer + FSDP + hydra 入口
+    "peft==0.20.0",                    # LoraConfig(target_parameters=...) 需 >=0
+    "transformers==4.57.1",            # 支持 qwen3 model_type
+    "datasets==5.0.1",                 # 兼容 pyarrow>=19(2.x 会报 PyExtensionType
+    "accelerate==0.34.2",
+
+    # ----- verl 传递依赖(显式钉版本,避免 pip 装到不兼容版本) -----
+    "ray[default]==2.56.1",
+    "hydra-core==1.3.5",
+    "omegaconf==2.3.0",
+    "tensordict==0.10.0",
+    "torchdata==0.11.0",
+    "torchdtiming==0.11.0",
+    "codetiming==1.4.0",
+
+    # ----- verl.workers.rollout 里 import 但没进 verl 依赖表 -----
+    "uvicorn>=0.52.1",
+    "fastapi>=0.141.1",
+
+    # ----- 数据处理 -----
+    "pandas==2.0.3",
+    "pyarrow==25.0.0",
+    "safetensors==0.4.5",
+    "tokenizers==0.22.2",
+
+    # ----- CUDA 内核(单独用 --no-build-isolation 装,见下方注释) -----
+    # "flash-attn==2.8.3.post1",
+]
+
+[project.optional-dependencies]
+# GRPO 阶段(暂未跑,仅记录预期依赖)
+grpo = [
+    "vllm>=0.10",
+]
+
+# 观测/日志
+observability = [
+    "wandb==0.28.1",
+    "tensorboard==2.17.1",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/lfq1234/Agentar-Fin-R1-Reproduce"
