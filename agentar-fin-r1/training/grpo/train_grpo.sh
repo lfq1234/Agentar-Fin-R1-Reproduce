@@ -5,7 +5,7 @@
 # Phase 1: 数据预处理（原始 JSON/JSONL → verl GRPO parquet）
 # Phase 2: GRPO 训练（在 SFT merge 后模型上做强化学习）
 #
-# 基座 Qwen3.5-9B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，
+# 基座 Qwen3.5-9B + LoRA(r=32, alpha=64, all-linear)，vLLM rollout，FSDP 训练，8×A800，
 # 外部 DeepSeek V4 Flash API 裁判（fin_judge_reward.py，走 OpenAI 兼容 /v1）。
 #
 # 与旧 ms-swift 版等价映射：
@@ -15,6 +15,8 @@
 #   max_completion_length=2048 → data.max_response_length=2048
 #   max_prompt_length=2048     → data.max_prompt_length=2048
 #   learning_rate=5e-6         → actor.optim.lr=5e-6
+#   warmup 3%                  → actor.optim.lr_warmup_steps_ratio=0.03
+#   weight_decay               → actor.optim.weight_decay=0.01
 #
 # 运行顺序：① SFT → ② merge_lora.py → ③ 本脚本
 #
@@ -46,7 +48,7 @@ fi
 # ---- Phase 2: GRPO 训练 ----
 SFT_MERGED=${SFT_MERGED:-./training/sft/merged}
 GRPO_DATA=${GRPO_DATA:-./data/verl/grpo.parquet}
-NPROC=${NPROC:-1}
+NPROC=${NPROC:-8}
 REWARD_SCRIPT=${REWARD_SCRIPT:-./training/grpo/fin_judge_reward.py}
 
 echo "[train_grpo.sh] Phase 2: GRPO 训练  merged=$SFT_MERGED  data=$GRPO_DATA"
@@ -65,9 +67,12 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=${SFT_MERGED} \
     actor_rollout_ref.model.lora_rank=32 \
     actor_rollout_ref.model.lora_alpha=64 \
+    actor_rollout_ref.model.target_modules=all-linear \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=5e-6 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.03 \
+    actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
@@ -81,7 +86,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.temperature=0.9 \
     actor_rollout_ref.rollout.top_p=0.9 \
