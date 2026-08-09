@@ -36,7 +36,9 @@ def _map_role(role: str) -> str:
 
 
 def load_messages(input_path: str) -> list[list[dict]]:
-    """从 JSON 数组或 JSONL 文件加载 messages 列表。"""
+    """从 JSON 数组或 JSONL 文件加载 messages 列表。
+    每条记录形如: {"id":"...", "messages":[{"role":"...", "content":"..."}, ...]}
+    """
     path = Path(input_path)
     if not path.exists():
         raise FileNotFoundError(f"输入文件不存在: {input_path}")
@@ -48,9 +50,9 @@ def load_messages(input_path: str) -> list[list[dict]]:
             data = json.load(f)
             if not isinstance(data, list):
                 raise ValueError("JSON 顶层必须是数组")
-            return data
+            return [item["messages"] for item in data]
         else:
-            return [json.loads(line) for line in f if line.strip()]
+            return [json.loads(line)["messages"] for line in f if line.strip()]
 
 
 def main():

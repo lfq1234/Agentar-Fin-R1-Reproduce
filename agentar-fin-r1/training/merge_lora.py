@@ -11,7 +11,7 @@ peft 兼容格式（adapter_config.json + adapter_model.safetensors）。本脚�
 
 用法：
     python training/merge_lora.py \
-        --base ./Qwen3.5-9B \
+        --base ./Qwen3-8B \
         --adapter ./training/sft/outputs \
         --output ./training/sft/merged
 """
@@ -24,7 +24,7 @@ from transformers import AutoTokenizer
 
 def main():
     p = argparse.ArgumentParser(description="Merge SFT LoRA adapter into base model")
-    p.add_argument("--base", default="./Qwen3.5-9B", help="基座模型（与 SFT 一致）")
+    p.add_argument("--base", default="./Qwen3-8B", help="基座模型（与 SFT 一致）")
     p.add_argument("--adapter", default="./training/sft/outputs", help="verl SFT 输出的 LoRA 目录")
     p.add_argument("--output", default="./training/sft/merged", help="merge 后完整 checkpoint 目录")
     args = p.parse_args()
