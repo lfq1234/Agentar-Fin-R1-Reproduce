@@ -50,6 +50,7 @@ grpo = [
 observability = [
     "wandb==0.28.1",
     "tensorboard==2.17.1",
+    "matplotlib>=3.8",          # 供 grpo/plot_logs.py 与 dapo/plot_logs.py 离线绘曲线
 ]
 
 [project.urls]
