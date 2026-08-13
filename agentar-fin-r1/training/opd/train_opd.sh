@@ -3,10 +3,11 @@
 # Agentar-Fin-R1 — Stage 3 OPD (verl) 两阶段启动壳
 # ----------------------------------------------------------------------------
 # On-Policy Distillation (OPD)：学生自采样 rollout，教师给 token 级 logprob 监督，
-# 学生 = Qwen3-0.6B，教师 = Qwen3-8B。走 verl.trainer.main_ppo + distillation.* 配置块。
+# 学生 = Qwen3-0.6B（LoRA r=32, alpha=64, all-linear），教师 = Qwen3-8B。
+# 走 verl.trainer.main_ppo + distillation.* 配置块。
 #
 # Phase 1: 数据预处理（原始 JSON/JSONL → verl parquet，仅保留 prompt）
-# Phase 2: OPD 训练（学生 FSDP 训练 + 教师 vLLM 推理，独立资源池）
+# Phase 2: OPD 训练（学生 FSDP + LoRA 训练 + 教师 vLLM 推理，独立资源池）
 #
 # 资源池（8×A800 单机拆分建议）：
 #   学生训练   trainer.n_gpus_per_node=4
@@ -72,6 +73,9 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation=error \
     actor_rollout_ref.model.path=${STUDENT_MODEL} \
+    actor_rollout_ref.model.lora_rank=32 \
+    actor_rollout_ref.model.lora_alpha=64 \
+    actor_rollout_ref.model.target_modules=all-linear \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \

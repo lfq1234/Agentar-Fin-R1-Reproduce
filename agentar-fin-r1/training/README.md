@@ -7,7 +7,7 @@ reward 同步阻塞，verl 用 vLLM rollout + Ray 式流水线，对本项目「
 三阶段：
 - **Stage 1 SFT**：金融知识注入（Qwen3-8B + LoRA r=64）
 - **Stage 2 DAPO**：难题攻坚（在 SFT merge 后模型上做 RL，DAPO 解耦 KL 至 reward）
-- **Stage 3 OPD**：蒸馏压缩（教师 Qwen3-8B → 学生 Qwen3-0.6B，On-Policy Distillation）
+- **Stage 3 OPD**：蒸馏压缩（教师 Qwen3-8B → 学生 Qwen3-0.6B + LoRA，On-Policy Distillation）
 
 ## 目录结构
 
