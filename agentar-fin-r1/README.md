@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | [`paper/`](paper/) | — | 论文原文、解读与架构笔记 |
 | [`data/`](data/) | 数据构造（三级治理） | 三级数据流水线：Source → Synthesis → Verification，产出 `(query, thinking, answer)` 三元组 |
-| [`training/`](training/) | 训练框架 | 难度感知加权 + 两阶段（SFT / GRPO）+ 归因闭环 |
+| [`training/`](training/) | 训练框架 | 难度感知加权 + 三阶段（SFT / DAPO / OPD 蒸馏）+ 归因闭环 |
 
 复现技术报告见 [`report.md`](report.md)。
 
