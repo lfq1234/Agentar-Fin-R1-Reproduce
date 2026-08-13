@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""绘制 GRPO 训练曲线 — 扫描 verl 训练日志（.jsonl）后离线画图。
+"""绘制 OPD 训练曲线 — 扫描 verl 训练日志（.jsonl）后离线画图。
 
-输出 2×2 综合图：
-  - 子图 1: Mean Reward     (critic/score/mean 等)
-  - 子图 2: Actor Loss      (actor/loss 等)
-  - 子图 3: KL Divergence   (actor/kl 等)
-  - 子图 4: Response Length (response_length/mean 等)
+输出 2×2 综合图（OPD 纯蒸馏，无任务 reward，指标聚焦蒸馏）：
+  - 子图 1: Actor Loss          (actor/loss 等)
+  - 子图 2: Distillation Loss   (actor/distillation/loss 等)
+  - 子图 3: Overlap Ratio       (actor/distillation/overlap_ratio，越接近 1 匹配越好)
+  - 子图 4: Response Length     (response_length/mean 等)
 
 风格对齐 training/sft/sft_loss_curve.png（浅色背景、蓝线 + marker + 数值标注 + 网格）。
 
 用法：
-  # 默认：扫描 ./training/grpo/outputs/，写到 ./training/grpo/training_curves.png
-  python training/grpo/plot_logs.py
+  # 默认：扫描 ./training/opd/outputs/，写到 ./training/opd/training_curves.png
+  python training/opd/plot_logs.py
 
   # 自定义目录/输出/标题
-  python training/grpo/plot_logs.py --log-dir ./my_logs/ --output ./out.png \
-      --title-prefix "GRPO Stage 2"
+  python training/opd/plot_logs.py --log-dir ./my_logs/ --output ./out.png \
+      --title-prefix "OPD Stage 3"
 
 依赖：matplotlib>=3.8（已加到 training/sft/pyproject.toml 的 observability 可选组）
 """
@@ -31,15 +31,15 @@ import matplotlib.pyplot as plt
 STEP_KEYS = ("step", "training_step", "global_step", "_step")
 
 METRIC_GROUPS = {
-    "reward_mean": (
-        "critic/score/mean", "reward/mean", "reward/score/mean",
-        "val/reward_mean", "reward_mean", "critic/rewards/mean",
-    ),
     "actor_loss": (
         "actor/loss", "actor/ppo_loss", "actor/pg_loss", "actor/policy_loss",
     ),
-    "kl": (
-        "actor/kl", "kl/mean", "actor/kl_loss", "kl_loss", "kl",
+    "distill_loss": (
+        "actor/distillation/loss", "distillation/loss",
+        "actor/distillation_loss", "distillation_loss",
+    ),
+    "overlap_ratio": (
+        "actor/distillation/overlap_ratio", "distillation/overlap_ratio",
     ),
     "response_length": (
         "response_length/mean", "response_length_mean",
@@ -47,9 +47,9 @@ METRIC_GROUPS = {
     ),
 }
 GROUP_TITLES = {
-    "reward_mean": "Mean Reward",
     "actor_loss": "Actor Loss",
-    "kl": "KL Divergence",
+    "distill_loss": "Distillation Loss",
+    "overlap_ratio": "Overlap Ratio (student vs teacher top-k)",
     "response_length": "Mean Response Length",
 }
 
@@ -159,7 +159,7 @@ def plot(series: dict, output: Path, title_prefix: str) -> None:
         ax.spines["right"].set_visible(False)
 
     fig.suptitle(
-        f"{title_prefix} Training Curves (Qwen3-8B + LoRA, DeepFinance-100K)",
+        f"{title_prefix} Training Curves (Qwen3-0.6B student ← Qwen3-8B teacher)",
         fontsize=14, fontweight="bold",
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
@@ -171,11 +171,11 @@ def plot(series: dict, output: Path, title_prefix: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines[1])
-    p.add_argument("--log-dir", default="./training/grpo/outputs",
+    p.add_argument("--log-dir", default="./training/opd/outputs",
                    help="训练日志根目录（递归扫描 .jsonl）")
-    p.add_argument("--output", default="./training/grpo/training_curves.png",
+    p.add_argument("--output", default="./training/opd/training_curves.png",
                    help="输出图片路径")
-    p.add_argument("--title-prefix", default="GRPO Stage 2",
+    p.add_argument("--title-prefix", default="OPD Stage 3",
                    help="图表标题前缀")
     args = p.parse_args()
 

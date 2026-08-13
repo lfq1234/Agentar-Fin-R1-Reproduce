@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Agentar-Fin-R1 — GRPO 数据预处理：原始对话 JSON → verl parquet。
+"""Agentar-Fin-R1 — OPD 数据预处理：原始对话 JSON → verl parquet。
 
-将原始数据（messages 格式，role: HUMAN/ASSISTANT）转换为 GRPO 格式：
+OPD 是纯蒸馏（学生自采样 + 教师 token 级 logprob 监督，不叠加任务 reward），
+因此只需 prompt（messages），无需 gold answer：
   - messages：仅保留 user 消息（prompt）
-  - extra_info：原题 + 标准思维链 + 标准答案输出（供 RLAIF 裁判对标）
+  - data_source：固定 "agentar_fin"（单教师模式下用于多教师路由，此处仅占位）
 
 用法：
-  python training/grpo/prepare_grpo_data.py \
-      --input ./data/raw/train.json --output ./data/verl/grpo.parquet
+  python training/opd/prepare_opd_data.py \
+      --input ./data/raw/train.json --output ./data/verl/opd.parquet
 """
 
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -24,18 +24,10 @@ ROLE_MAP = {
 }
 
 HUMAN_ROLES = {"HUMAN", "human", "USER"}
-ASSISTANT_ROLES = {"ASSISTANT", "assistant", "GPT"}
 
 
 def _map_role(role: str) -> str:
     return ROLE_MAP.get(role, role)
-
-
-def _split_thinking_and_output(content: str) -> tuple[str, str]:
-    m = re.search(r"<think>(.*?)</think>(.*)", content, re.DOTALL)
-    if m:
-        return m.group(1).strip(), m.group(2).strip()
-    return "", content.strip()
 
 
 def load_messages(input_path: str) -> list[list[dict]]:
@@ -55,9 +47,9 @@ def main():
     p.add_argument("--output", required=True)
     args = p.parse_args()
 
-    print(f"[prepare_grpo] 加载: {args.input}")
+    print(f"[prepare_opd] 加载: {args.input}")
     messages_list = load_messages(args.input)
-    print(f"[prepare_grpo] 共 {len(messages_list)} 条")
+    print(f"[prepare_opd] 共 {len(messages_list)} 条")
 
     records = []
     for messages in messages_list:
@@ -65,26 +57,15 @@ def main():
             {"role": _map_role(m["role"]), "content": m["content"]}
             for m in messages if m.get("role") in HUMAN_ROLES
         ]
-        assistant_content = next(
-            (m["content"] for m in messages if m.get("role") in ASSISTANT_ROLES), ""
-        )
-        gold_thinking, gold_output = _split_thinking_and_output(assistant_content)
-        question = next(
-            (m["content"] for m in messages if m.get("role") in HUMAN_ROLES), ""
-        )
         records.append({
             "messages": prompt_msgs,
-            "extra_info": json.dumps({
-                "question": question,
-                "gold_thinking": gold_thinking,
-                "gold_output": gold_output,
-            }),
+            "data_source": "agentar_fin",
         })
 
     df = pd.DataFrame(records)
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     df.to_parquet(args.output, index=False)
-    print(f"[prepare_grpo] 完成 → {args.output} ({len(df)} 条)")
+    print(f"[prepare_opd] 完成 → {args.output} ({len(df)} 条)")
 
 
 if __name__ == "__main__":
