@@ -14,7 +14,7 @@
 #   教师推理   distillation.n_gpus_per_node=4（8B 用 tensor_parallel=2 → 2 replicas）
 #   （学生 0.6B 极小，4 卡 FSDP 足够；8B 教师 4 卡 TP 也很轻松）
 #
-# 蒸馏损失：PG OPD（loss_mode=k1 + use_policy_gradient=True，官方默认），
+# 蒸馏损失：GKD OPD（loss_mode=forward_kl_topk，教师 top-k 前向 KL，use_policy_gradient=False），
 #   纯蒸馏不叠加任务 reward（use_task_rewards=False），故无需 reward 裁判脚本。
 #
 # 用法：
@@ -51,9 +51,9 @@ NPROC=${NPROC:-4}                          # 学生训练 GPU 数
 TEACHER_WORLD_SIZE=${TEACHER_WORLD_SIZE:-4} # 教师资源池 GPU 数
 TEACHER_TP=${TEACHER_TP:-2}                 # 教师 tensor 并行度
 
-LOSS_MODE=${LOSS_MODE:-k1}                  # k1 / k2 / k3 / kl / low_var_kl / forward_kl_topk
-USE_POLICY_GRADIENT=${USE_POLICY_GRADIENT:-True}
-DISTILL_TOPK=${DISTILL_TOPK:-64}
+LOSS_MODE=${LOSS_MODE:-forward_kl_topk}      # forward_kl_topk（top-k 前向 KL）/ k1 / k2 / k3 / low_var_kl
+USE_POLICY_GRADIENT=${USE_POLICY_GRADIENT:-False}  # forward_kl_topk 必须 False（GKD，直接反向传播）
+DISTILL_TOPK=${DISTILL_TOPK:-64}             # 教师 top-k 覆盖数（64：官方文本蒸馏验证值）
 
 MAX_PROMPT_LEN=${MAX_PROMPT_LEN:-2048}
 MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-2048}
