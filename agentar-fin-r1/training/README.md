@@ -20,17 +20,32 @@ training/
 │   ├── train_sft.sh              # Stage 1 两阶段壳（预处理 → 训练）
 │   ├── prepare_sft_data.py       # 原始对话 JSON/JSONL → verl parquet
 │   ├── sft_loss_curve.png        # SFT 训练 loss 曲线
-│   └── pyproject.toml            # 环境依赖
+│   └── pyproject.toml            # 环境依赖（RL/蒸馏阶段需额外 vllm，见 grpo 可选组）
 ├── dapo/
 │   ├── train_dapo.sh             # Stage 2 两阶段壳（预处理 → DAPO 训练）
 │   ├── prepare_dapo_data.py       # 原始对话 JSON/JSONL → verl DAPO parquet
 │   ├── fin_judge_reward.py        # 奖励函数：格式闸门 → RLAIF rubric 打分
-│   └── plot_logs.py               # 训练日志离线绘图
+│   ├── plot_logs.py               # 训练日志离线绘图
+│   ├── dapo_training_curves.png   # DAPO 训练曲线（示例）
+│   └── pyproject.toml            # 环境依赖（vllm / requests / 可选 observability）
 └── opd/
     ├── train_opd.sh               # Stage 3 两阶段壳（预处理 → OPD 蒸馏训练）
     ├── prepare_opd_data.py        # 原始对话 JSON/JSONL → verl parquet（仅 prompt）
-    └── plot_logs.py               # 训练日志离线绘图（蒸馏指标）
+    ├── plot_logs.py               # 训练日志离线绘图（蒸馏指标）
+    ├── opd_training_curves.png    # OPD 蒸馏训练曲线（示例）
+    └── pyproject.toml            # 环境依赖（vllm，无 requests：纯蒸馏不走裁判）
 ```
+
+## 各阶段训练配置速查
+
+| 阶段 | 模型 | LoRA | train_batch_size | rollout.n | 每步样本数 | 关键超参 |
+|------|------|------|------------------|-----------|------------|----------|
+| SFT | Qwen3-8B | r=64 / α=128 | 16 | — | 16 | lr=1e-4, warmup 3%, cosine, 2 epochs |
+| DAPO | Qwen3-8B（SFT merge 后） | r=32 / α=64 | 64 | 8 | 512 | lr=5e-6, adv_estimator=dapo, max_response=8192 |
+| OPD | 学生 Qwen3-0.6B / 教师 Qwen3-8B | r=32 / α=64 | 128 | 1 | 128 | lr=1e-6, loss_mode=forward_kl_topk(topk=64), use_policy_gradient=False |
+
+> verl 的 `train_batch_size` 计 prompt 数，实际生成数 = `train_batch_size × rollout.n`。
+> DAPO 每步 512 条最重（8K 响应 + vLLM rollout）；OPD 每步 128 条（n=1，0.6B 学生很轻）。
 
 ## 运行顺序
 
@@ -76,6 +91,25 @@ python training/opd/plot_logs.py    # 默认扫 ./training/opd/outputs/ → trai
 
 - 最终 loss: 0.5014，相比起始 0.6692 下降约 25%
 - 3000~3500 步有一次陡降，随后稳定收敛在 0.50~0.51
+
+## DAPO 训练曲线（示例）
+
+DAPO（`train_dapo.sh`，Qwen3-8B + LoRA，DAPO adv，rollout.n=8）的离线示例曲线，
+由 `dapo/plot_logs.py` 解析 verl 日志产出（仓库内含一张示例图）：
+
+![DAPO Training Curves](dapo/dapo_training_curves.png)
+
+4 个子图：Actor Loss、Mean Reward、Mean Response Length（CoT，~1700 token 起）、Generation Entropy。
+
+## OPD 蒸馏训练曲线（示例）
+
+OPD（`train_opd.sh`，学生 Qwen3-0.6B ← 教师 Qwen3-8B，forward_kl_topk 蒸馏）的离线示例曲线：
+
+![OPD Training Curves](opd/opd_training_curves.png)
+
+4 个子图：Distillation Loss、Overlap Ratio（师生 top-1 命中率）、Actor Loss、Mean Response Length（0.6B 学生，~676 token 起）。
+
+> 上述 DAPO/OPD 曲线为示例图（演示指标趋势），真实训练请以 `plot_logs.py` 解析实际日志为准。
 
 ## reward 实现（dapo/fin_judge_reward.py）
 
