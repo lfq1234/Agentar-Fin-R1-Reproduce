@@ -56,7 +56,7 @@ USE_POLICY_GRADIENT=${USE_POLICY_GRADIENT:-False}  # forward_kl_topk 必须 Fals
 DISTILL_TOPK=${DISTILL_TOPK:-64}             # 教师 top-k 覆盖数（64：官方文本蒸馏验证值）
 
 MAX_PROMPT_LEN=${MAX_PROMPT_LEN:-2048}
-MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-2048}
+MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-8192}
 MAX_MODEL_LEN=$((MAX_PROMPT_LEN + MAX_RESPONSE_LEN + 1))
 
 echo "[train_opd.sh] Phase 2: OPD 训练  student=$STUDENT_MODEL  teacher=$TEACHER_MODEL  data=$OPD_DATA"
@@ -83,7 +83,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=12288 \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -97,7 +97,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=1.0 \
     actor_rollout_ref.rollout.max_model_len=${MAX_MODEL_LEN} \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=True \
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=12288 \
     distillation.enabled=True \
     distillation.n_gpus_per_node=${TEACHER_WORLD_SIZE} \
     distillation.nnodes=1 \
