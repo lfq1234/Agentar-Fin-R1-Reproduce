@@ -59,7 +59,7 @@ python3 -m verl.trainer.main_ppo \
     data.messages_key=messages \
     data.train_batch_size=64 \
     data.max_prompt_length=2048 \
-    data.max_response_length=2048 \
+    data.max_response_length=8192 \
     data.filter_overlong_prompts=True \
     data.truncation=error \
     actor_rollout_ref.model.path=${SFT_MERGED} \
@@ -73,7 +73,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=12288 \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -85,11 +85,11 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.temperature=0.9 \
     actor_rollout_ref.rollout.top_p=0.9 \
-    actor_rollout_ref.rollout.max_model_len=4096 \
+    actor_rollout_ref.rollout.max_model_len=10240 \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=True \
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=12288 \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=True \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=12288 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_dtype=bfloat16 \
     actor_rollout_ref.rollout.reward_model.enable=False \
